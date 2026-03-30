@@ -14,7 +14,7 @@ class HumanFrameViewer:
     # Function: slice label map
     # Function: update plotter
 
-    def __init__(self, label_maps, num_envs, device, label_res=0.0015, height_img=0.1, visualize=True, plane_axes={'h': [0, 0, 1], 'w': [1, 0, 0]}):
+    def __init__(self, label_maps, num_envs, device, label_res=0.0015, height_img=0.10, visualize=True, plane_axes={'h': [0, 0, 1], 'w': [1, 0, 0]}):
         '''
         label maps: list of label maps (3D volumes)
         num_envs: number of environments

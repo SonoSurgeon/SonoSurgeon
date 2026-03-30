@@ -35,8 +35,8 @@ class LabelImgSlicer(SurfaceMotionPlanner):
         label_res=0.0015,
         max_distance=0.015,  # [m]
         body_label=120,
-        height=0.1,
-        height_img=0.1,
+        height=0.10,
+        height_img=0.10,
         visualize=True,
         plane_axes={"h": [0, 0, 1], "w": [1, 0, 0]},
     ):

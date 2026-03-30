@@ -47,11 +47,16 @@ import nibabel as nib
 import cProfile
 import time
 import numpy as np
+import matplotlib.pyplot as plt
+
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 ##
 # Pre-defined configs
 ##
 from spinal_surgery.assets.kuka_US import *
+from spinal_surgery.assets.kuka_drill import *
 from isaaclab.utils.math import subtract_frame_transforms, combine_frame_transforms
 from pxr import Gf, UsdGeom
 from scipy.spatial.transform import Rotation as R
@@ -61,6 +66,10 @@ from spinal_surgery.lab.sensors.ultrasound.label_img_slicer import LabelImgSlice
 from spinal_surgery.lab.sensors.ultrasound.US_slicer import USSlicer
 from ruamel.yaml import YAML
 from spinal_surgery import PACKAGE_DIR
+
+def isaac_to_scipy_quat(quat_wxyz: np.ndarray) -> np.ndarray:
+    """Convert quaternion from IsaacLab convention (w, x, y, z) to SciPy (x, y, z, w)."""
+    return np.array([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]])
 
 scene_cfg = YAML().load(open(f"{PACKAGE_DIR}/scenes/cfgs/robotic_US_scene.yaml", 'r'))
 
@@ -78,7 +87,19 @@ INIT_STATE_ROBOT_US = ArticulationCfg.InitialStateCfg(
     },
     pos = robot_cfg['pos'] # ((0.0, -0.75, 0.4))
 )
-
+# drill robot (visual only)
+INIT_STATE_ROBOT_DRILL = ArticulationCfg.InitialStateCfg(
+    joint_pos={
+        "lbr_joint_0": robot_cfg["joint_pos"][0],
+        "lbr_joint_1": robot_cfg["joint_pos"][1],
+        "lbr_joint_2": robot_cfg["joint_pos"][2],
+        "lbr_joint_3": robot_cfg["joint_pos"][3],
+        "lbr_joint_4": robot_cfg["joint_pos"][4],
+        "lbr_joint_5": robot_cfg["joint_pos"][5],
+        "lbr_joint_6": robot_cfg["joint_pos"][6],
+    },
+    pos=(2.0, 2.0, 0.0),
+)
 # patient
 patient_cfg = scene_cfg['patient']
 quat = R.from_euler("yxz", patient_cfg['euler_yxz'], degrees=True).as_quat()
@@ -97,13 +118,13 @@ INIT_STATE_BED = AssetBaseCfg.InitialStateCfg(
 scale_bed = bed_cfg['scale']
 # use stl: Totalsegmentator_dataset_v2_subset_body_contact
 human_usd_list = [
-            f"{ASSETS_DATA_DIR}/HumanModels/Totalsegmentator_dataset_v2_subset_body_from_urdf/" + p_id for p_id in patient_cfg['id_list']
+            f"{ASSETS_DATA_DIR}/HumanModels/selected_dataset_body_from_urdf/" + p_id for p_id in patient_cfg['id_list']
 ]
 human_stl_list = [
-            f"{ASSETS_DATA_DIR}/HumanModels/Totalsegmentator_dataset_v2_subset_stl/" + p_id for p_id in patient_cfg['id_list']
+            f"{ASSETS_DATA_DIR}/HumanModels/selected_dataset_stl/" + p_id for p_id in patient_cfg['id_list']
 ]
 human_raw_list = [
-            f"{ASSETS_DATA_DIR}/HumanModels/Totalsegmentator_dataset_v2_subset/" + p_id for p_id in patient_cfg['id_list']
+            f"{ASSETS_DATA_DIR}/HumanModels/selected_dataset/" + p_id for p_id in patient_cfg['id_list']
 ]
 
 usd_file_list = [human_file + "/combined_wrapwrap/combined_wrapwrap.usd" for human_file in human_usd_list]
@@ -130,6 +151,12 @@ class RobotSceneCfg(InteractiveSceneCfg):
     robot_US = KUKA_HIGH_PD_CFG.replace(
         prim_path="/World/envs/env_.*/Robot_US",
         init_state=INIT_STATE_ROBOT_US
+    )
+
+    # kuka drill (visual only)
+    robot_drill = KUKA_HIGH_PD_DRILL_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot_Drill",
+        init_state=INIT_STATE_ROBOT_DRILL,
     )
 
     # medical bad
@@ -166,8 +193,8 @@ class RobotSceneCfg(InteractiveSceneCfg):
             retain_accelerations=False,
             linear_damping=0.0,
             angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=1000.0,
+            max_linear_velocity=0.001,
+            max_angular_velocity=0.001,
             max_depenetration_velocity=1.0,
             solver_position_iteration_count=8,
             solver_velocity_iteration_count=0,
@@ -189,6 +216,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
     # note: we only do this here for readability.
     robot = scene["robot_US"]
     human = scene['human']
+    robot_drill = scene["robot_drill"]
     robot_entity_cfg = SceneEntityCfg("robot_US", joint_names=["lbr_joint_.*"], body_names=["lbr_link_ee"])
     robot_entity_cfg.resolve(scene)
     US_ee_jacobi_idx = robot_entity_cfg.body_ids[-1]
@@ -225,6 +253,31 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
     count = 0
+
+    # --- Error logging (for plotting) ---
+    pos_err_hist = []   # position error norm [m]
+    ang_err_hist = []   # orientation error [deg]
+    time_hist    = []   # simulation time [s]
+
+    # --- Live plot setup ---
+    plt.ion()  # turn on interactive mode
+
+    fig, (ax_pos, ax_ang) = plt.subplots(2, 1, sharex=True)
+    fig.suptitle("EE tracking errors")
+
+    # frame visualization
+    frame_vis = VisualizationMarkers(
+        VisualizationMarkersCfg(
+            prim_path="/Visuals/frames",
+            markers={
+                "frame": sim_utils.UsdFileCfg(
+                    usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
+                    scale=(0.05, 0.05, 0.05),  # rimpicciolisci se troppo grande
+                ),
+            },
+        )
+    )
+
     # Simulation loop
     while simulation_app.is_running():
         # Reset
@@ -236,6 +289,12 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
             joint_vel = robot.data.default_joint_vel.clone()
             robot.write_joint_state_to_sim(joint_pos, joint_vel)
             robot.reset()
+
+            # keep drill robot at default pose (visual only)
+            drill_joint_pos = robot_drill.data.default_joint_pos.clone()
+            drill_joint_vel = robot_drill.data.default_joint_vel.clone()
+            robot_drill.write_joint_state_to_sim(drill_joint_pos, drill_joint_vel)
+            robot_drill.reset()
 
             diff_ik_controller.reset()
             pose_diff_ik_controller.reset()
@@ -249,7 +308,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
                 US_root_pose_w[:, 0:3], US_root_pose_w[:, 3:7], US_ee_pose_w[:, 0:3], US_ee_pose_w[:, 3:7]
             )
 
-            ik_commands = torch.zeros(scene.num_envs, diff_ik_controller.action_dim, device=sim.device)
+            ik_commands = torch.rand(scene.num_envs, diff_ik_controller.action_dim, device=sim.device)
             diff_ik_controller.set_command(ik_commands, US_ee_pos_b, US_ee_quat_b)
             ik_commands_pose = torch.zeros(scene.num_envs, pose_diff_ik_controller.action_dim, device=sim.device)
             pose_diff_ik_controller.set_command(ik_commands_pose, US_ee_pos_b, US_ee_quat_b)
@@ -276,10 +335,16 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
         US_ee_pos_b, US_ee_quat_b = subtract_frame_transforms(
             world_to_base_pose[:, 0:3], world_to_base_pose[:, 3:7], US_ee_pose_w[:, 0:3], US_ee_pose_w[:, 3:7]
         )
+
+        marker_indices = torch.zeros(scene.num_envs, dtype=torch.long, device=sim.device)
+
+        # disegna il frame sull'EE (WORLD frame)
+        # frame_vis.visualize(US_ee_pose_w[:, :3], US_ee_pose_w[:, 3:], marker_indices=marker_indices)
+
         # update image simulation
         US_slicer.slice_US(world_to_human_pos, world_to_human_rot, US_ee_pose_w[:, 0:3], US_ee_pose_w[:, 3:7])
         if sim_cfg['vis_us']:
-            US_slicer.visualize()
+            US_slicer.visualize(key="US", first_n=1)
         
         # compute frame in root frame
         if sim_cfg['vis_seg_map']:
@@ -320,8 +385,116 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
         scene.update(sim_dt)
 
         end = time.time()
-        print(f"Time taken for step: {end - start}")
+        #print(f"Time taken for step: {end - start}")
+        """
+        ############# DEBUG #############
+        # Commanded target pose in WORLD (from planner / US_slicer)
+        target_pos_w_dbg = world_to_ee_target_pos[0].detach().cpu().numpy()
+        target_quat_wxyz = world_to_ee_target_rot[0].detach().cpu().numpy()
+        target_quat_xyzw = isaac_to_scipy_quat(target_quat_wxyz)
+        target_quat_w_dbg = R.from_quat(target_quat_xyzw).as_euler("xyz", degrees=True)
 
+        # Actual EE pose in WORLD (from simulation)
+        ee_state_w = robot.data.body_state_w[:, robot_entity_cfg.body_ids[-1], 0:7]  # (N, 7)
+        ee_pos_w_dbg  = ee_state_w[0, 0:3].detach().cpu().numpy()
+        ee_quat_wxyz  = ee_state_w[0, 3:7].detach().cpu().numpy()
+        ee_quat_xyzw  = isaac_to_scipy_quat(ee_quat_wxyz)
+        ee_quat_w_dbg = R.from_quat(ee_quat_xyzw).as_euler("xyz", degrees=True)
+
+        # --- Error in wrist/EE frame ---
+        ee_pos_w_t  = ee_state_w[:, 0:3]   # (N, 3), torch
+        ee_quat_w_t = ee_state_w[:, 3:7]   # (N, 4), torch
+
+        err_pos_ee_t, err_quat_ee_t = subtract_frame_transforms(
+            ee_pos_w_t, ee_quat_w_t,            # parent: current EE pose
+            world_to_ee_target_pos,             # child: target pose
+            world_to_ee_target_rot,
+        )
+
+        # Convert error quaternion Isaac(wxyz) -> SciPy(xyzw)
+        err_quat_wxyz = err_quat_ee_t[0].detach().cpu().numpy()
+        err_quat_xyzw = isaac_to_scipy_quat(err_quat_wxyz)
+
+        pos_err_vec      = err_pos_ee_t[0].detach().cpu().numpy()           # shape (3,)
+        ang_err_vec_deg  = R.from_quat(err_quat_xyzw).as_euler("xyz", degrees=True)
+
+        pos_err_norm     = np.linalg.norm(pos_err_vec)
+        ang_err_norm_deg = np.linalg.norm(ang_err_vec_deg)
+
+        # --- Error logging (for plotting) ---
+        if len(time_hist) == 0:
+            t_now = 0.0
+        else:
+            t_now = time_hist[-1] + sim_dt
+
+        time_hist.append(t_now)
+        pos_err_hist.append(pos_err_vec)
+        ang_err_hist.append(ang_err_vec_deg)
+
+        # --- Live plot update (continuous, per-axis in EE frame) ---
+        if count % 10 == 0 and len(time_hist) > 0:
+            pos_arr = np.stack(pos_err_hist, axis=0)  # (T, 3)
+            ang_arr = np.stack(ang_err_hist, axis=0)  # (T, 3)
+
+            # Position error components
+            ax_pos.clear()
+            ax_pos.plot(time_hist, pos_arr[:, 0], label="ex (EE)")
+            ax_pos.plot(time_hist, pos_arr[:, 1], label="ey (EE)")
+            ax_pos.plot(time_hist, pos_arr[:, 2], label="ez (EE)")
+            ax_pos.set_ylabel("Pos err [m] (EE frame)")
+            ax_pos.grid(True)
+            ax_pos.legend()
+
+            # Orientation error components
+            ax_ang.clear()
+            ax_ang.plot(time_hist, ang_arr[:, 0], label="eroll (EE)")
+            ax_ang.plot(time_hist, ang_arr[:, 1], label="epitch (EE)")
+            ax_ang.plot(time_hist, ang_arr[:, 2], label="eyaw (EE)")
+            ax_ang.set_xlabel("Time [s]")
+            ax_ang.set_ylabel("Ang err [deg] (EE frame)")
+            ax_ang.grid(True)
+            ax_ang.legend()
+
+            plt.pause(0.001)  # allow matplotlib to update the window
+
+        if count % 60 == 0:
+            print("\n[DBG] ---- EE pose (WORLD) ----")
+            print(f"[CMD] target_pos_w    = {target_pos_w_dbg}")
+            print(f"[CMD] target_quat_w   = {target_quat_w_dbg}")
+            print(f"[SIM] ee_pos_w        = {ee_pos_w_dbg}")
+            print(f"[SIM] ee_quat_w       = {ee_quat_w_dbg}")
+            print(f"[ERR] pos_err_vec (EE)= {pos_err_vec} m")
+            print(f"[ERR] ang_err_vec (EE)= {ang_err_vec_deg} deg")
+            print(f"[ERR] ||pos_err||     = {pos_err_norm:.4f} m")
+            print(f"[ERR] ||ang_err||     = {ang_err_norm_deg:.2f} deg")
+
+        ep_len = sim_cfg["episode_length"]
+
+        # Alla fine di ogni episodio (ultimo step)
+        if count % ep_len == ep_len - 1 and len(pos_err_hist) >= ep_len:
+            # Prendi solo gli ultimi ep_len passi (episodio corrente)
+            pos_arr = np.stack(pos_err_hist[-ep_len:], axis=0)  # (ep_len, 3)
+            ang_arr = np.stack(ang_err_hist[-ep_len:], axis=0)  # (ep_len, 3)
+
+            # Norme per step
+            pos_norms = np.linalg.norm(pos_arr, axis=1)        # (ep_len,)
+            ang_norms = np.linalg.norm(ang_arr, axis=1)        # (ep_len,)
+
+            # Medie sulle norme
+            mean_pos_norm = pos_norms.mean()
+            mean_ang_norm = ang_norms.mean()
+
+            # (Opzionale) medie componente per componente
+            mean_pos_vec = pos_arr.mean(axis=0)   # ex, ey, ez medi
+            mean_ang_vec = ang_arr.mean(axis=0)   # eroll, epitch, eyaw medi
+
+            print("\n[EP] ===== Mean errors over last episode =====")
+            print(f"[EP] steps considered      = {ep_len}")
+            print(f"[EP] mean ||pos_err||      = {mean_pos_norm:.4f} m")
+            print(f"[EP] mean ||ang_err||      = {mean_ang_norm:.2f} deg")
+            print(f"[EP] mean pos_err_vec (EE) = {mean_pos_vec} m")
+            print(f"[EP] mean ang_err_vec (EE) = {mean_ang_vec} deg")
+        """
 
 def main():
     """Main function."""

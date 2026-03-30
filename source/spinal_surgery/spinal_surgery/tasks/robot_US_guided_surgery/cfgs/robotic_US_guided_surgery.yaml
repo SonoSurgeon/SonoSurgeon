@@ -60,6 +60,7 @@ sim:
   vis_int: 5
   vis_seg_map: False
   
-
+if_record_traj: True
+record_path: /recordings/robot_US_guided_surgery/
 
 

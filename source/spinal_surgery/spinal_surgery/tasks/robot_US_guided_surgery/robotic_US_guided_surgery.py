@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import torch
 
 import isaaclab.sim as sim_utils
@@ -26,6 +25,7 @@ from collections.abc import Sequence
 import gymnasium as gym
 import pyvista as pv
 import copy
+import os
 
 ##
 # Pre-defined configs
@@ -56,6 +56,7 @@ from spinal_surgery.lab.kinematics.gt_motion_generator import (
 import cProfile
 from gymnasium.spaces import Dict
 import wandb
+from isaacsim.util.debug_draw import _debug_draw 
 
 scene_cfg = YAML().load(
     open(
@@ -202,6 +203,9 @@ ct_map_file_list = [human_file + "/ct.nii.gz" for human_file in human_raw_list]
 label_res = patient_cfg["label_res"]
 scale = 1 / label_res
 
+CAMERA_EYE = (1.36, 0.475, 1.23)
+CAMERA_TARGET = (0.489, 0.158, 0.855)
+
 
 @configclass
 class roboticUSGuidedSurgeryCfg(DirectRLEnvCfg):
@@ -244,6 +248,9 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         self, cfg: roboticUSGuidedSurgeryCfg, render_mode: str | None = None, **kwargs
     ):
         super().__init__(cfg, render_mode, **kwargs)
+
+        if self.sim.has_gui():
+            self.sim.set_camera_view(CAMERA_EYE, CAMERA_TARGET)
 
         if scene_cfg["robot"]["type"] == "kuka":
             self.robot_entity_cfg = SceneEntityCfg(
@@ -496,6 +503,41 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
 
         # wandb.init()
         self.num_step = 0
+        
+        #DBG
+        self._dd = _debug_draw.acquire_debug_draw_interface()
+        self._dbg_axis_len = 0.05   # 5 cm
+        self._dbg_axis_w = 3.0      # line width
+        self._dbg_show_env0_only = True
+
+    def _debug_draw_frame_w(self, pos_w: torch.Tensor, quat_wxyz_w: torch.Tensor, axis_len: float):
+        pos_w = pos_w.detach().cpu()
+        quat_wxyz_w = quat_wxyz_w.detach().cpu()
+
+        R = matrix_from_quat(quat_wxyz_w)  # (N,3,3) su CPU
+
+        x_dir = R[:, :, 0]
+        y_dir = R[:, :, 1]
+        z_dir = R[:, :, 2]
+
+        p0 = pos_w
+        px = pos_w + axis_len * x_dir
+        py = pos_w + axis_len * y_dir
+        pz = pos_w + axis_len * z_dir
+
+        starts = torch.cat([p0, p0, p0], dim=0)
+        ends   = torch.cat([px, py, pz], dim=0)
+
+        N = pos_w.shape[0]
+        colors = ([(1,0,0,1)]*N + [(0,1,0,1)]*N + [(0,0,1,1)]*N)
+        widths = [float(self._dbg_axis_w)] * (3*N)
+
+        self._dd.draw_lines(
+            [tuple(v.tolist()) for v in starts],
+            [tuple(v.tolist()) for v in ends],
+            colors,
+            widths,
+        )
 
     def get_US_target_pose(self):
         # compute position change
@@ -747,6 +789,49 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         }
 
         self.check_nan()
+        
+        """
+
+        self.drill_ee_pose_w = self.robot_drill.data.body_state_w[
+            :, self.robot_drill_entity_cfg.body_ids[-1], 0:7
+        ]
+
+        # --- debug draw: EE + TIP (world)
+        if self._dbg_show_env0_only:
+            idx = torch.tensor([0], device=self.sim.device)
+        else:
+            idx = torch.arange(self.scene.num_envs, device=self.sim.device)
+
+        # clear old drawings
+        self._dd.clear_lines()
+        self._dd.clear_points()
+
+        # US EE frame (world)
+        us_pos_w = self.US_ee_pose_w[idx, 0:3]
+        us_quat_wxyz_w = self.US_ee_pose_w[idx, 3:7]
+        self._debug_draw_frame_w(us_pos_w, us_quat_wxyz_w, self._dbg_axis_len)
+
+        # Drill EE frame (world)
+        dr_pos_w = self.drill_ee_pose_w[idx, 0:3]
+        dr_quat_wxyz_w = self.drill_ee_pose_w[idx, 3:7]
+        self._debug_draw_frame_w(dr_pos_w, dr_quat_wxyz_w, self._dbg_axis_len)
+
+        # Tip frame (world): combine drill_ee_pose_w with drill_to_tip (in EE frame)
+        tip_pos_w, tip_quat_w = combine_frame_transforms(
+            dr_pos_w,
+            dr_quat_wxyz_w,
+            self.drill_to_tip_pos[idx],
+            self.drill_to_tip_quat[idx],
+        )
+        self._debug_draw_frame_w(tip_pos_w, tip_quat_w, self._dbg_axis_len)
+
+        # Optionale: un punto sul tip
+        self._dd.draw_points(
+            [tuple(v.tolist()) for v in tip_pos_w],
+            [(1.0, 1.0, 0.0, 1.0)] * tip_pos_w.shape[0],
+            [8.0] * tip_pos_w.shape[0],
+        )
+        """
 
         return observations
 
@@ -987,6 +1072,14 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         self.extras["human_to_traj_pos"] = self.vertebra_viewer.human_to_traj_pos
         self.extras["tip_pos_along_traj"] = self.tip_pos_along_traj
 
+        if scene_cfg["if_record_traj"]:
+            if not hasattr(self, "tip_pos_along_traj_trajs"):
+                self.tip_pos_along_traj_trajs = []
+            if not hasattr(self, "tip_to_traj_dist_trajs"):
+                self.tip_to_traj_dist_trajs = []
+            self.tip_pos_along_traj_trajs.append(self.tip_pos_along_traj)
+            self.tip_to_traj_dist_trajs.append(self.tip_to_traj_dist)
+
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -1221,6 +1314,19 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         self.extras["human_to_traj_pos"] = self.vertebra_viewer.human_to_traj_pos
         self.extras["tip_pos_along_traj"] = self.tip_pos_along_traj
         self.extras["cost"] = torch.zeros(self.scene.num_envs, device=self.sim.device)
+
+        if scene_cfg["if_record_traj"]:
+            record_path = PACKAGE_DIR + scene_cfg["record_path"]
+            if hasattr(self, "tip_pos_along_traj_trajs"):
+                if not os.path.exists(record_path):
+                    os.makedirs(record_path)
+                # Stack over time: [N_envs, T]  (time is dim=1)
+                self.tip_pos_along_traj_trajs = torch.stack(self.tip_pos_along_traj_trajs, dim=1)
+                torch.save(self.tip_pos_along_traj_trajs, record_path + "tip_pos_along_traj.pt")
+                self.tip_to_traj_dist_trajs = torch.stack(self.tip_to_traj_dist_trajs, dim=1)
+                torch.save(self.tip_to_traj_dist_trajs, record_path + "tip_to_traj_dist.pt")
+            self.tip_pos_along_traj_trajs = [self.tip_pos_along_traj]
+            self.tip_to_traj_dist_trajs = [self.tip_to_traj_dist]
 
     def check_nan(self):
         if torch.isnan(self.US_ee_pos_b).any() or torch.isnan(self.US_ee_quat_b).any():

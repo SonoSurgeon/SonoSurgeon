@@ -1,3 +1,4 @@
+
 from spinal_surgery.lab.sensors.ultrasound.label_img_slicer import LabelImgSlicer
 from spinal_surgery.lab.sensors.ultrasound.simulate_US_conv import USSimulatorConv
 from spinal_surgery.lab.sensors.ultrasound.simulate_US_network import USSimulatorNetwork
@@ -6,6 +7,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 import time
+import os
 
 
 class USSlicer(LabelImgSlicer):
@@ -98,6 +100,15 @@ class USSlicer(LabelImgSlicer):
         # construct random maps
         self.construct_T_maps()
         self.construct_Vl_maps()
+
+        ################################################
+        self.enable_us_record = True        # set True to enable saving frames
+        self.us_record_dir = "us_frames"     # folder for US PNG frames
+        self.us_frame_idx = 0                # frame counter
+        ################################################
+
+        if self.enable_us_record:
+            os.makedirs(self.us_record_dir, exist_ok=True)
 
         # construct images
         self.T0_img_tensor = torch.zeros(
@@ -398,6 +409,7 @@ class USSlicer(LabelImgSlicer):
                 (self.num_envs, -1, self.img_size[1], self.img_size[0])
             ).permute(0, 2, 3, 1)
 
+
     def visualize(self, key, first_n=10):
         super().visualize(key, first_n)
         # if key=='CT' or key=='seg':
@@ -440,6 +452,14 @@ class USSlicer(LabelImgSlicer):
                     cmap="gray",
                 )  # 30
                 plt.pause(0.0001)
+                
+                if self.enable_us_record:
+                    fname = os.path.join(
+                        self.us_record_dir, f"us_{self.us_frame_idx:05d}.png"
+                    )
+                    plt.imsave(fname, (combined_img_np.T / np.max(combined_img_np) * 255).astype(np.uint8), cmap="gray")
+                    self.us_frame_idx += 1
+
             elif self.sim_mode == "net":
                 plt.figure(3, figsize=(first_n * 2, 3))
                 plt.clf()
@@ -452,6 +472,13 @@ class USSlicer(LabelImgSlicer):
                     cmap="gray",
                 )
                 plt.pause(0.0001)
+
+                if self.enable_us_record:
+                    fname = os.path.join(
+                        self.us_record_dir, f"us_{self.us_frame_idx:05d}.png"
+                    )
+                    plt.imsave(fname, (combined_img_np.T / np.max(combined_img_np) * 255).astype(np.uint8), cmap="gray")
+                    self.us_frame_idx += 1
 
             if self.sim_mode == "both":
                 plt.figure(4, figsize=(first_n * 2, 3))

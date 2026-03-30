@@ -19,11 +19,11 @@ from isaaclab.app import AppLauncher
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Play a checkpoint of an RL agent from skrl.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
-parser.add_argument("--video_length", type=int, default=200, help="Length of the recorded video (in steps).")
+parser.add_argument("--video_length", type=int, default=1200, help="Length of the recorded video (in steps).")
 parser.add_argument(
     "--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations."
 )
-parser.add_argument("--num_envs", type=int, default=2, help="Number of environments to simulate.")
+parser.add_argument("--num_envs", type=int, default=64, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default='Isaac-robot-US-guided-surgery-v0', help="Name of the task.")
 parser.add_argument("--checkpoint", type=str, default='/home/yunkao/git/IsaacLabExtensionTemplate/logs/experiments/us-guided-surgery/single/model-based-sim/PPO/2025-04-25_18-39-42_ppo_torch_PPO_default_US_net/checkpoints/best_agent.pt', help="Path to model checkpoint.")
 parser.add_argument(

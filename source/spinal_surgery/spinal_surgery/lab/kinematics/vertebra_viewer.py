@@ -3,6 +3,7 @@ import pyvista as pv
 from isaaclab.utils.math import subtract_frame_transforms, combine_frame_transforms 
 from isaaclab.utils.math import matrix_from_quat, quat_from_matrix, transform_points
 import numpy as np
+import os
 
 class VertebraViewer:
     def __init__(self, num_envs, n_human_types, vertebra_file_list, traj_file_list, if_vis, res, device):
@@ -38,6 +39,16 @@ class VertebraViewer:
         self.traj_drct = torch.stack(self.traj_drct_list)[self.env_to_human_inds] # (N, 3)
         self.traj_radius = torch.stack(self.traj_radius_list)[self.env_to_human_inds] * self.res # (N,)
         self.traj_half_length = torch.stack(self.traj_half_length_list)[self.env_to_human_inds] * self.res # (N,)
+
+        ################################################
+        self.enable_us_record = True        # set True to enable saving frames
+        self.us_record_dir = "drill_frames_0"     # folder for US PNG frames
+        self.us_frame_idx = 0                # frame counter
+        self.p_index = 0
+        ################################################
+
+        if self.enable_us_record:
+            os.makedirs(self.us_record_dir, exist_ok=True)
 
         # visualize
         if self.if_vis:
@@ -113,7 +124,64 @@ class VertebraViewer:
 
         return pos_along_drct, distance_to_traj, sin_angle
 
+    def visualize(self, index=0):
+        self.p = pv.Plotter()
+        
+        tip_points_a_np = self.tip_points_a.cpu().numpy()
+        tip_points_b_np = self.tip_points_b.cpu().numpy()
+        for i in range(self.num_envs):
+            self.tip_line_list[i].points = np.stack([tip_points_a_np[i], 
+                                                    tip_points_b_np[i]], axis=0)
+            if i % self.n_human_types == index:
+                self.p.add_mesh(self.tip_line_list[i], color='green', opacity=1.0)
 
+        # Vertebra
+        self.p.add_mesh(self.vertebra_points_np_list[index], color='cornflowerblue', point_size=0.5)
+
+        # Existing red goal points
+        cylinder_points = self.traj_points_np_list[index]
+        print(cylinder_points)
+        print(self.human_to_traj_pos[index])
+
+        goal_points = cylinder_points[
+            cylinder_points[:, 1] > self.human_to_traj_pos[index, 1].item() / self.res
+        ]
+        self.p.add_mesh(goal_points, color='darkred', point_size=2.0)
+
+        # Red cylinder: starts from the target circle plane at +0.0246 m
+        # and extends for 6.5 cm in the negative longitudinal direction
+        cyl_height_m = 0.0746
+        target_offset_m = 0.0246
+
+        cyl_height = cyl_height_m / self.res
+        cyl_radius = self.traj_radius[index].item() / self.res
+
+        cyl_dir = self.traj_drct[index].detach().cpu().numpy()
+        cyl_dir = cyl_dir / np.linalg.norm(cyl_dir)
+
+        traj_center = self.human_to_traj_pos[index].detach().cpu().numpy() / self.res
+
+        # Target circle center at +0.0246 m along the longitudinal axis
+        target_center = traj_center + (target_offset_m / self.res) * cyl_dir
+
+        # Cylinder extends in the negative longitudinal direction,
+        # so its geometric center is shifted backward by half its height
+        cyl_center = target_center - 0.5 * cyl_height * cyl_dir
+
+        goal_cylinder = pv.Cylinder(
+            center=cyl_center,
+            direction=cyl_dir,
+            radius=cyl_radius,
+            height=cyl_height,
+            resolution=50,
+        )
+
+        self.p.add_mesh(goal_cylinder, color='indianred', opacity=0.12)
+
+        self.p.show(interactive_update=True)
+        self.p.show_axes()
+
+    """
     def visualize(self, index=0):
         self.p = pv.Plotter()
         
@@ -136,8 +204,8 @@ class VertebraViewer:
 
         self.p.show(interactive_update=True)
         self.p.show_axes()
+    """
 
-        
     def update_tip_vis(self, human_to_tip_pos, human_to_tip_rot):
         scaled_pos = human_to_tip_pos / self.res
         tip_points_ab = transform_points(self.tip_points_ab, scaled_pos, human_to_tip_rot)
@@ -157,5 +225,11 @@ class VertebraViewer:
             #     self.p.add_mesh(tip_line, color='green', opacity=0.2)
             
         self.p.update()
-        
+
+        if self.enable_us_record:
+            fname = os.path.join(
+                self.us_record_dir, f"drill_{self.us_frame_idx:05d}.png"
+            )
+            self.p.screenshot(fname)
+            self.us_frame_idx += 1
 

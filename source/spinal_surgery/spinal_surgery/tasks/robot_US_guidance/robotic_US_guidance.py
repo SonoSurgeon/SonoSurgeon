@@ -89,7 +89,7 @@ elif scene_cfg["robot"]["type"] == "fr3":
             "fr3_joint2": robot_cfg["joint_pos"][1],
             "fr3_joint3": robot_cfg["joint_pos"][2],
             "fr3_joint4": robot_cfg["joint_pos"][3],  # -1.2,
-            "fr3_joint5": robot_cfg["joint_pos"][4],
+            "fr3_joint5": robot_cfg["j setoint_pos"][4],
             "fr3_joint6": robot_cfg["joint_pos"][5],  # 1.5,
             "fr3_joint7": robot_cfg["joint_pos"][6],
         },
@@ -969,6 +969,6 @@ class roboticUSEnv(DirectRLEnv):
                 if not os.path.exists(record_path):
                     os.makedirs(record_path)
                 self.cmd_pose_trajs = torch.stack(self.cmd_pose_trajs, dim=1)
-                torch.save(self.cmd_pose_trajs, record_path + "cmd_pose_trajs.pt")
-                torch.save(self.goal_cmd_pose, record_path + "goal_cmd_pose.pt")
+                torch.save(self.cmd_pose_trajs, record_path + "cmd_pose_trajs_yu.pt")
+                torch.save(self.goal_cmd_pose, record_path + "goal_cmd_pose_yu.pt")
             self.cmd_pose_trajs = [self.cur_cmd_pose]

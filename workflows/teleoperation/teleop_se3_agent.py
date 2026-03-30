@@ -50,11 +50,14 @@ simulation_app = app_launcher.app
 
 """Rest everything follows."""
 
-
 import gymnasium as gym
 import torch
 
-from isaaclab.devices import Se3Gamepad, Se3Keyboard, Se3SpaceMouse
+from isaaclab.devices import (
+    Se3Gamepad, Se3GamepadCfg,
+    Se3Keyboard, Se3KeyboardCfg,
+    Se3SpaceMouse, Se3SpaceMouseCfg,
+)
 from isaaclab.managers import TerminationTermCfg as DoneTerm
 
 import isaaclab_tasks  # noqa: F401
@@ -77,16 +80,17 @@ def pre_process_actions(
         or "surgery" in args_cli.task
         or "US" in args_cli.task
     ):
-        # note: reach is the only one that uses a different action space
-        # compute actions
-        return delta_pose
+        # per queste task l'ambiente si aspetta un'azione di traslazione (3D)
+        # prendi solo le prime 3 componenti
+        if delta_pose.ndim == 1:
+            return delta_pose[:3]
+        return delta_pose[:, :3]
     else:
         # resolve gripper command
         gripper_vel = torch.zeros(delta_pose.shape[0], 1, device=delta_pose.device)
         gripper_vel[:] = -1.0 if gripper_command else 1.0
         # compute actions
         return torch.concat([delta_pose, gripper_vel], dim=1)
-
 
 def main():
     """Running keyboard teleoperation with Isaac Lab manipulation environment."""
@@ -120,20 +124,11 @@ def main():
 
     # create controller
     if args_cli.teleop_device.lower() == "keyboard":
-        teleop_interface = Se3Keyboard(
-            pos_sensitivity=0.05 * args_cli.sensitivity,
-            rot_sensitivity=0.05 * args_cli.sensitivity,
-        )
+        teleop_interface = Se3Keyboard(Se3KeyboardCfg())
     elif args_cli.teleop_device.lower() == "spacemouse":
-        teleop_interface = Se3SpaceMouse(
-            pos_sensitivity=0.05 * args_cli.sensitivity,
-            rot_sensitivity=0.005 * args_cli.sensitivity,
-        )
+        teleop_interface = Se3SpaceMouse(Se3SpaceMouseCfg())
     elif args_cli.teleop_device.lower() == "gamepad":
-        teleop_interface = Se3Gamepad(
-            pos_sensitivity=0.1 * args_cli.sensitivity,
-            rot_sensitivity=0.1 * args_cli.sensitivity,
-        )
+        teleop_interface = Se3Gamepad(Se3GamepadCfg())
     else:
         raise ValueError(
             f"Invalid device interface '{args_cli.teleop_device}'. Supported: 'keyboard', 'spacemouse'."
@@ -156,18 +151,24 @@ def main():
         with torch.inference_mode():
             step += 1
             # get keyboard command
-            delta_pose, gripper_command = teleop_interface.advance()
-            delta_pose = delta_pose.astype("float32")
-            # convert to torch
-            delta_pose = torch.tensor(delta_pose, device=env.unwrapped.device).repeat(
-                env.unwrapped.num_envs, 1
-            )
+            out = teleop_interface.advance()
+            if isinstance(out, tuple):
+                delta_pose, gripper_command = out
+            else:
+                delta_pose, gripper_command = out, False
+
+            # convert delta_pose to torch.float32 on env device and repeat for all envs
+            if isinstance(delta_pose, torch.Tensor):
+                delta_pose = delta_pose.to(dtype=torch.float32, device=env.unwrapped.device)
+            else:
+                delta_pose = torch.tensor(delta_pose, dtype=torch.float32, device=env.unwrapped.device)
+            delta_pose = delta_pose.repeat(env.unwrapped.num_envs, 1)
+
             # pre-process actions
             actions = pre_process_actions(delta_pose, gripper_command)
 
             # apply actions
             env.step(actions)
-
     # close the simulator
     env.close()
 
