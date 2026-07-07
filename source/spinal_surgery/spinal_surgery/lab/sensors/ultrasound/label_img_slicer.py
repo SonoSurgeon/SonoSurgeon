@@ -39,6 +39,7 @@ class LabelImgSlicer(SurfaceMotionPlanner):
         height_img=0.10,
         visualize=True,
         plane_axes={"h": [0, 0, 1], "w": [1, 0, 0]},
+        thickness_offsets=None,
     ):
         """
         label maps: list of label maps (3D volumes)
@@ -79,6 +80,20 @@ class LabelImgSlicer(SurfaceMotionPlanner):
         self.img_real_size = [img_size[0] * img_res, img_size[1] * img_res]
         self.height_img = height_img
 
+        if thickness_offsets is None:
+            self.thickness_offsets = (
+                torch.arange(self.img_thickness, device=self.device, dtype=torch.float32)
+                - self.img_thickness // 2
+            )
+        else:
+            self.thickness_offsets = torch.as_tensor(
+                thickness_offsets, device=self.device, dtype=torch.float32
+            )
+            if int(self.thickness_offsets.numel()) != int(self.img_thickness):
+                raise ValueError(
+                    f"Expected {self.img_thickness} thickness offsets, got {int(self.thickness_offsets.numel())}"
+                )
+
         # TODO: add CT maps
         self.ct_maps = [
             torch.tensor(ct_map, dtype=torch.int32, device=device) for ct_map in ct_maps
@@ -98,10 +113,9 @@ class LabelImgSlicer(SurfaceMotionPlanner):
 
         # construct grids
         self.x_grid, self.z_grid, self.y_grid = torch.meshgrid(
-            torch.arange(self.img_size[0], device=self.device) - self.img_size[0] // 2,
-            torch.arange(self.img_size[1], device=self.device),
-            torch.arange(self.img_thickness, device=self.device)
-            - self.img_thickness // 2,
+            torch.arange(self.img_size[0], device=self.device, dtype=torch.float32) - self.img_size[0] // 2,
+            torch.arange(self.img_size[1], device=self.device, dtype=torch.float32),
+            self.thickness_offsets,
         )  # (w, h, e, 1)
         # self.y_grid = torch.zeros_like(self.x_grid, device=self.device)
         self.img_coords = (

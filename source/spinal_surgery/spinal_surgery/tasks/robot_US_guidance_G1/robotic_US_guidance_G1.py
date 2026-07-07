@@ -313,6 +313,13 @@ class roboticUSEnv(DirectRLEnv):
         else:
             img_thickness = 1
 
+        self.surgery_target = scene_cfg["motion_planning"]["surgery_target"]
+
+        if self.surgery_target:
+            roll_adj = scene_cfg["motion_planning"]["surgery_US_roll_adj"]
+        else:
+            roll_adj = scene_cfg["motion_planning"]["US_roll_adj"]
+
         # construct US simulator
         self.US_slicer = USSlicer(
             us_cfg,
@@ -328,6 +335,7 @@ class roboticUSEnv(DirectRLEnv):
             us_cfg["image_size"],
             us_cfg["resolution"],
             img_thickness=img_thickness,
+            roll_adj=roll_adj,
             visualize=self.sim_cfg["vis_seg_map"],
             sim_mode=scene_cfg["sim"]["us"],
             us_generative_cfg=us_generative_cfg,
@@ -461,17 +469,49 @@ class roboticUSEnv(DirectRLEnv):
 
             self.manipulability_trajs = []  # list of (N_envs,) tensors, appended every step
 
+            obs_shape = (
+                self.US_slicer.img_thickness,
+                int(us_cfg["image_size"][1]),
+                int(us_cfg["image_size"][0]),
+            )
+
+            self._buf_policy_obs_env0 = torch.zeros(
+                (self._max_T, *obs_shape), device=self.sim.device, dtype=torch.float32
+            )
+            self._buf_policy_raw_action_env0 = torch.zeros(
+                (self._max_T, self.cfg.action_space), device=self.sim.device, dtype=torch.float32
+            )
+            self._buf_policy_final_action_env0 = torch.zeros(
+                (self._max_T, self.cfg.action_space), device=self.sim.device, dtype=torch.float32
+            )
+
+            self.last_policy_obs_env0 = torch.zeros_like(self._buf_policy_obs_env0)
+            self.last_policy_raw_action_env0 = torch.zeros_like(self._buf_policy_raw_action_env0)
+            self.last_policy_final_action_env0 = torch.zeros_like(self._buf_policy_final_action_env0)
+             
+
 
     def get_US_target_pose(self):
-        vertebra_to_US_2d_pos = torch.tensor(scene_cfg["motion_planning"]["vertebra_to_US_2d_pos"]).to(self.sim.device)
+        
+        if self.surgery_target == False:  # fixed target from YAML
+            vertebra_to_US_2d_pos = torch.tensor(scene_cfg["motion_planning"]["vertebra_to_US_2d_pos"]).to(self.sim.device)
 
-        vertebra_2d_pos = self.vertebra_viewer.human_to_ver_per_envs[:, [0, 2]]
-        US_target_2d_pos = vertebra_2d_pos + vertebra_to_US_2d_pos.unsqueeze(0)
+            vertebra_2d_pos = self.vertebra_viewer.human_to_ver_per_envs[:, [0, 2]]
+            US_target_2d_pos = vertebra_2d_pos + vertebra_to_US_2d_pos.unsqueeze(0)
 
-        US_target_2d_angle = self.goal_cmd_pose[:, 2:3] * torch.ones_like(vertebra_2d_pos[:, 0:1])
+            US_target_2d_angle = self.goal_cmd_pose[:, 2:3] * torch.ones_like(vertebra_2d_pos[:, 0:1])
 
-        US_target_2d = torch.cat([US_target_2d_pos, US_target_2d_angle], dim=-1)
-        self.goal_cmd_pose = US_target_2d
+            US_target_2d = torch.cat([US_target_2d_pos, US_target_2d_angle], dim=-1)
+            self.goal_cmd_pose = US_target_2d
+        
+        else:
+            # Compute vertebra-based target exactly once from the current anatomy state
+            vertebra_to_US_2d_pos = torch.tensor(scene_cfg["motion_planning"]["surgery_vertebra_to_US_2d_pos"]).to(self.sim.device)
+            vertebra_2d_pos = self.vertebra_viewer.human_to_ver_per_envs[:, [0, 2]]
+            US_target_2d_pos = vertebra_2d_pos + vertebra_to_US_2d_pos.unsqueeze(0)
+            US_target_2d_angle = scene_cfg["motion_planning"]["surgery_US_target_2d_angle"] * torch.ones_like(vertebra_2d_pos[:, 0:1])
+            US_target_2d = torch.cat([US_target_2d_pos, US_target_2d_angle], dim=-1)
+            self.goal_cmd_pose = US_target_2d
 
     def _setup_scene(self):
         """Configuration for the robotic US guidance scene."""
@@ -618,11 +658,16 @@ class roboticUSEnv(DirectRLEnv):
             )
             label_img = self.US_slicer.label_img_tensor.permute(0, 3, 1, 2) * self.cfg.observation_scale
             observations = {"policy": label_img}
+            
         else:
             raise ValueError("Invalid observation mode")
 
         if self.sim_cfg["vis_us"] and self.num_step % self.sim_cfg["vis_int"] == 0:
             self.US_slicer.visualize(self.observation_mode)
+
+        if self._record_traj:
+            t0 = int(torch.clamp(self.episode_length_buf[0], 0, self._max_T - 1).item())
+            self._buf_policy_obs_env0[t0] = observations["policy"][0].detach()
 
         return observations
 
@@ -630,6 +675,8 @@ class roboticUSEnv(DirectRLEnv):
         # if action is 6 dim, convert to 3 dim (xz pos + y rot)
         if actions.shape[-1] == 6:
             actions = actions[:, [0, 2, 5]]
+
+        raw_actions_for_log = actions.clone()
 
         if self.action_mode == "continuous":
             actions = torch.clamp(actions * self.action_scale, -self.max_action, self.max_action)
@@ -642,8 +689,13 @@ class roboticUSEnv(DirectRLEnv):
         if robot_type == "h1":
             actions *= 4
         if robot_type == "g1":
-            actions *= 0.3
+            actions *= 4 # surgery 0.3
 
+        if self._record_traj:
+            t0 = int(torch.clamp(self.episode_length_buf[0], 0, self._max_T - 1).item())
+            self._buf_policy_raw_action_env0[t0] = raw_actions_for_log[0].detach()
+            self._buf_policy_final_action_env0[t0] = actions[0].detach()
+            
         # action: dx, dz in image frame -> human frame
         human_to_ee_pos, human_to_ee_quat = subtract_frame_transforms(
             self.world_to_human_pos,
@@ -958,6 +1010,12 @@ class roboticUSEnv(DirectRLEnv):
             self.last_dist_to_goal_traj[_env_ids_t] = self._buf_dist_to_goal[_env_ids_t]
             self.last_success_mask_traj[_env_ids_t] = self._buf_success_mask[_env_ids_t]
 
+            # export debug policy traces for env 0
+            if 0 in set(torch.as_tensor(env_ids).cpu().tolist()):
+                self.last_policy_obs_env0.copy_(self._buf_policy_obs_env0)
+                self.last_policy_raw_action_env0.copy_(self._buf_policy_raw_action_env0)
+                self.last_policy_final_action_env0.copy_(self._buf_policy_final_action_env0)
+
             # save to disk at every reset (play mode, homogeneous episode length)
             self._save_traj_logs()
 
@@ -965,6 +1023,13 @@ class roboticUSEnv(DirectRLEnv):
             self._buf_cmd_pose[_env_ids_t].zero_()
             self._buf_dist_to_goal[_env_ids_t].zero_()
             self._buf_success_mask[_env_ids_t].zero_()
+            
+            if 0 in set(torch.as_tensor(env_ids).cpu().tolist()):
+                self._buf_policy_obs_env0.zero_()
+                self._buf_policy_raw_action_env0.zero_()
+                self._buf_policy_final_action_env0.zero_()
+
+
 
         super()._reset_idx(env_ids)
 
@@ -1180,6 +1245,20 @@ class roboticUSEnv(DirectRLEnv):
                 torch.save(manipulability_tensor, record_path + "yoshikawa_manipulability.pt")
             self.manipulability_trajs = []
 
+            
+            torch.save(
+                self.last_policy_obs_env0.detach().cpu(),
+                os.path.join(record_path, "policy_obs_env0.pt"),
+            )
+            torch.save(
+                self.last_policy_raw_action_env0.detach().cpu(),
+                os.path.join(record_path, "policy_raw_action_env0.pt"),
+            )
+            torch.save(
+                self.last_policy_final_action_env0.detach().cpu(),
+                os.path.join(record_path, "policy_final_action_env0.pt"),
+            )
+            
         except Exception as e:
             print(f"[LOG][ERROR] saving failed: {e!r}", flush=True)
             raise

@@ -12,7 +12,7 @@ from . import agents
 ##
 
 gym.register(
-    id="Isaac-robot-US-guidance-Pink-v0",
+    id="Isaac-robot-US-guidance-pink-v0",
     entry_point=f"{__name__}.robotic_US_guidance_Pink:roboticUSEnv",
     disable_env_checker=True,
     kwargs={

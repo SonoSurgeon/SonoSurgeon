@@ -42,7 +42,7 @@ class VertebraViewer:
 
         ################################################
         self.enable_us_record = True        # set True to enable saving frames
-        self.us_record_dir = "drill_frames_0"     # folder for US PNG frames
+        self.us_record_dir = os.path.join("drill_frames", "drill_frames_0")     # folder for US PNG frames
         self.us_frame_idx = 0                # frame counter
         self.p_index = 0
         ################################################
@@ -54,7 +54,8 @@ class VertebraViewer:
         if self.if_vis:
             self.tip_points_a = torch.zeros((self.num_envs, 3), device=self.device)
             self.tip_points_b = torch.zeros((self.num_envs, 3), device=self.device)
-            self.tip_points_b[:, 2] = -20
+            self.tip_points_a[:, 2] = -20
+            self.tip_points_b[:, 2] = 0.0
             self.tip_points_ab = torch.stack([self.tip_points_a, self.tip_points_b], dim=1)
             self.tip_line_list = []
             for i in range(self.num_envs):
@@ -177,6 +178,24 @@ class VertebraViewer:
         )
 
         self.p.add_mesh(goal_cylinder, color='indianred', opacity=0.12)
+        
+        
+        # Set default camera view.
+        # The camera looks along the Z axis, so Z is perpendicular to the screen.
+        # X is shown horizontally, while Y remains in the image plane.
+        self.p.reset_camera()
+
+        target = np.mean(self.vertebra_points_np_list[index], axis=0)
+        dist = 500.0
+
+        self.p.camera_position = [
+            tuple(target + np.array([0.0, -50.0, dist])),  # camera eye
+            tuple(target),                               # camera target
+            (0.0, -1.0, 0.0),                             # view-up direction
+        ]
+
+        self.p.enable_parallel_projection()
+        
 
         self.p.show(interactive_update=True)
         self.p.show_axes()

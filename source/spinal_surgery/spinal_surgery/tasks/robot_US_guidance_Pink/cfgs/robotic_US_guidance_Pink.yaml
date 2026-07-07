@@ -1,65 +1,151 @@
-robot:
-  type: 'g1'
-  side: 'left' # 'left' or 'right'
-
-g1: 
-  pos: [0.1, -0.7, 1.1]
-  yaw: 90.0
-  height: 0.13 # +0.01
-  height_img: 0.137 # +0.01
-
-h1: 
-  pos: [0.0, -0.7, 0.8]
-  yaw: 90.0
-  height: 0.203 # +0.01
-  height_img: 0.208 # +0.01
+# Select which configuration branch to use:
+#   surgery_target
+#   guidance_target
+active_cfg: surgery_target
 
 
-patient:
-  pos: [0.2, -0.55, 1.150]
-  euler_yxz: [-90.0, -90.0, 0.0]
-  id_list: ['s0010'] #['s0015', 's0024', 's0028', 's0029', 's0030'] # ['s0010'] # 's0010', 's0014', 's0015'
-  label_res: 0.0015 # m
-  target_anatomy: 'vertebrae_L4'
+configs:
 
-bed:
-  pos: [0.0, -0.15, 0.5]
-  euler_xyz: [90, 0.0, 90]
-  scale: 0.0008
+  surgery_target:
 
-motion_planning:
-  patient_xz_goal: [150, 170, 3.14]
-  use_vertebra_goal: True
-  vertebra_to_US_2d_pos: [0.0, 0.0]
-  scale: [[5, 5, 0.1]]
+    robot:
+      type: 'g1'
+      side: 'left' # 'left' or 'right'
 
-observation: 
-  3D: False
-  mode: 'US' # 'seg', 'CT', 'US'
-  scale: 0.02 # 0.02 for datacollection, 0.1 for learning-based
-  scale_net: 0.1
-action: 
-  mode: 'continuous' # 'discrete', 'continuous'
-  scale: [0.5, 0.5, 0.04] # -25/20%
-  max_action: [1.0, 1.0, 0.1] # -25/20%
+    g1:
+      pos: [0.1, -0.7, 1.1]
+      yaw: 90.0
+      height: 0.13
+      height_img: 0.137
 
-reward:
-  w_pos: 0.06
-  success_radius: 0.005 # 5mm
-  success_time: 2 #s
-  success_bonus: 3
-  action_penalty: 0.0
+    h1:
+      pos: [0.05, -0.85, 0.92]
+      yaw: 90.0
+      height: 0.190
+      height_img: 0.197
 
-sim:
-  episode_length: 16 # +20%
-  patient_xz_range: [[100, 80, 1.0], [180, 170, 3.0]]
-  patient_xz_init_range: [[100, 80, 1.5], [180, 170, 3.0]]
-  if_use_ct: True
-  ct_range: [-300, 3000]
-  us: 'conv' # 'conv', 'net', 'both'
-  vis_us: True
-  vis_int: 5
-  vis_seg_map: False
+    patient:
+      pos: [0.2, -0.55, 1.10]
+      euler_yxz: [-90.0, -80.0, 0.0]
+      id_list: ['s0010']
+      label_res: 0.0015 # m
+      target_anatomy: 'vertebrae_L4'
 
+    bed:
+      pos: [0.0, -0.15, 0.5]
+      euler_xyz: [90, 0.0, 90]
+      scale: 0.0008
+
+    motion_planning:
+      vertebra_to_US_2d_pos: [-29.5, -18] # [-26.0, -9] [-30.0, 0.0]
+      US_target_2d_angle: 1.62 # 1.55
+      US_roll_adj: -0.4
+      patient_xz_goal: [150, 170, 3.14]
+      use_vertebra_goal: True
+      scale: [[5, 5, 0.1]]
+
+    observation:
+      3D: False
+      mode: 'US'
+      scale: 0.02
+      scale_net: 0.1
+
+    action:
+      mode: 'continuous'
+      scale: [0.5, 0.5, 0.04]
+      max_action: [1.0, 1.0, 0.1]
+      w_action : 0.3
+      damping: 0.001
+
+    reward:
+      w_pos: 0.06
+      success_circle: 0.2
+      success_bonus: 0.5
+      success_hold_s: 1.0
+      alpha_max : 1.25
+
+    sim:
+      episode_length: 4
+      patient_xz_range: [[85, 100, 1.0], [125, 155, 3.0]]
+      patient_xz_init_range: [[90, 110, 1.5], [120, 150, 3.0]]
+      if_use_ct: True
+      ct_range: [-300, 3000]
+      us: 'conv'
+      vis_us: True
+      vis_int: 5
+      vis_seg_map: False
+
+
+  guidance_target:
+
+    robot:
+      type: 'g1'
+      side: 'left' # 'left' or 'right'
+
+    g1:
+      pos: [0.1, -0.7, 1.1]
+      yaw: 90.0
+      height: 0.13
+      height_img: 0.137
+
+    h1:
+      pos: [0.05, -0.85, 0.92]
+      yaw: 90.0
+      height: 0.190
+      height_img: 0.197
+
+    patient:
+      pos: [0.2, -0.55, 1.10]
+      euler_yxz: [-90.0, -80.0, 0.0]
+      id_list: ['s0010']
+      label_res: 0.0015 # m
+      target_anatomy: 'vertebrae_L4'
+
+    bed:
+      pos: [0.0, -0.15, 0.5]
+      euler_xyz: [90, 0.0, 90]
+      scale: 0.0008
+
+    motion_planning:
+      vertebra_to_US_2d_pos: [-30.0, 0.0]
+      US_target_2d_angle: 1.57
+      US_roll_adj: -0.4
+      patient_xz_goal: [150, 170, 3.14]
+      use_vertebra_goal: True
+      scale: [[5, 5, 0.1]]
+
+    observation:
+      3D: False
+      mode: 'US'
+      scale: 0.02
+      scale_net: 0.1
+
+    action:
+      mode: 'continuous'
+      scale: [0.5, 0.5, 0.04]
+      max_action: [1.0, 1.0, 0.1]
+      w_action : 0.3
+      damping: 0.001
+
+    reward:
+      w_pos: 0.06
+      success_circle: 0.2
+      success_bonus: 0.5
+      success_hold_s: 1.0
+      alpha_max: 1.0
+
+    sim:
+      episode_length: 4
+      patient_xz_range: [[85, 100, 1.0], [135, 155, 3.0]]
+      patient_xz_init_range: [[90, 110, 1.5], [130, 150, 3.0]]
+      if_use_ct: True
+      ct_range: [-300, 3000]
+      us: 'conv'
+      vis_us: True
+      vis_int: 5
+      vis_seg_map: False
+
+
+# Shared recording settings
 if_record_traj: True
-record_path: /recordings/robot_US_guidance_Pink/
+record_path: /recordings/robot_US_guidance_G1/

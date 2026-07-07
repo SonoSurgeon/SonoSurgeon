@@ -1,13 +1,27 @@
 use_wandb: True
 
+run: 'standard_surgery' # standard_surgery
+
 robot:
-  type: 'fr3'  # 'kuka', fr3
+  type: 'kuka'
+  pose_randomization: False
   pos: [0.0, -0.5, 0.0]
   joint_pos: [1.5, -0.5, 0.0, -1.0, 0.0, 1.6, 0.0]
+  randomization:
+    position:
+      x: [-0.05, 0.05]
+      y: [-0.05, 0.05]
+      z: [-0.05, 0.05]
 
 robot_drill:
-  pos: [0.0, 0.5, 0.1] # [0.0, 0.5, 0.05] # 
-  joint_pos: [-1.5, -0.2, 0.0, -1.3, 0.0, 1.8, 0.0] # [-1.6, -0.0, 0.0, -1.3, 0.0, 1.8, 0.0] # datacollection  #[[-1.4749,  0.0356,  0.0065, -1.5546, -0.0807,  1.4267,  0.8291],
+  pose_randomization: False
+  pos: [0.0, 0.5, 0.1]
+  joint_pos: [-1.5, -0.2, 0.0, -1.3, 0.0, 1.8, 0.0]
+  randomization:
+    position:
+      x: [-0.05, 0.05]
+      y: [-0.05, 0.05]
+      z: [-0.05, 0.05]
 
 patient:
   pos: [0.2, -0.2, 0.7] # 0.7
@@ -22,24 +36,46 @@ bed:
   scale: 0.0004
 
 motion_planning:
-  joint_pos_rand_max: [0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1] #[0.3, 0.25, 0.2, 0.2, 0.2, 0.2, 0.2] # data collection: 
-  vertebra_to_US_2d_pos: [-30.0, 0.0] # [-30, 0.0]
-  US_roll_adj: -0.4
-  vertebra_to_US_rand_max: 5.0 # 10.0
-  US_roll_rand_max: 0.1
-  scale: [[2, 2, 0.1]]
+  standard_surgery:
+    joint_pos_rand_max: [0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1] #[0.3, 0.25, 0.2, 0.2, 0.2, 0.2, 0.2] # data collection: 
+    vertebra_to_US_2d_pos: [-30.0, 0.0] # [-30, 0.0]
+    US_roll_adj: -0.4
+    US_target_2d_angle: 1.57
+    vertebra_to_US_rand_range:
+      x: [-5, 5] 
+      z: [-5, 5] 
+    US_roll_rand_max: 0.1  # roll noise around US_roll_adj
+    US_yaw_rand_max: 0.1 # yaw noise around US_target_2d_angle
+    scale: [[2, 2, 0.1]]
+    patient_xz_goal: [150, 170, 3.14] # placeholder
+
+  random_probe:
+    joint_pos_rand_max: [0.2, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    vertebra_to_US_2d_pos: [-30, 0.0]
+    US_roll_adj: -0.4   # -0.4
+    US_target_2d_angle: 1.57
+    vertebra_to_US_rand_range:
+      x: [-15.0, 15.0] 
+      z: [-15.0, 15.0] 
+    US_roll_rand_max: 0.0  # roll noise around US_roll_adj
+    US_yaw_rand_max: 0.2 # yaw noise around US_target_2d_angle
+    scale: [[2, 2, 0.1]]
+    patient_xz_goal: [150, 170, 3.14]
 
 observation: 
+  style: "large" # large = 7 x 150 x 200, small 25 x 37 x 50
   3D: True
+  image_3D_thickness: 7
   downsample: 4
   mode: 'US' # 'seg', 'CT', 'US'
   scale: 0.02 # 0.1, 0.0005, 0.1 for learning-based, 0.02 for model-based
   scale_net: 0.1
+  image_3D_offsets: [-12, -8, -4, 0, 4, 8, 12]
 
 action: 
   mode: 'continuous' # 'discrete', 'continuous'
-  scale: [0.1, 0.1, 0.1, 1.0, 1.0, 1.0]  # [0.1, 0.1, 0.1, 1.0, 1.0, 1.0]
-  max_action: [0.03, 0.03, 0.03, 0.1, 0.1, 0.1]  # [0.03, 0.03, 0.03, 0.1, 0.1, 0.1]
+  scale: [0.1, 0.1, 0.1, 1.0, 1.0]  # [0.1, 0.1, 0.1, 1.0, 1.0, 1.0]
+  max_action: [0.03, 0.03, 0.03, 0.1, 0.1]  # [0.03, 0.03, 0.03, 0.1, 0.1, 0.1]
 
 reward:
   safe_height: 0.05 # 5cm # 10 cm

@@ -52,10 +52,11 @@ from spinal_surgery.lab.kinematics.vertebra_viewer import VertebraViewer
 import cProfile
 import wandb
 import os
-
 scene_cfg = YAML().load(
     open(f"{PACKAGE_DIR}/tasks/robot_US_guidance/cfgs/robotic_US_guidance.yaml", "r")
 )
+
+
 # TODO: fix observation scale
 if scene_cfg["sim"]["us"] == "net":
     scene_cfg["observation"]["scale"] = scene_cfg["observation"]["scale_net"]
@@ -89,7 +90,7 @@ elif scene_cfg["robot"]["type"] == "fr3":
             "fr3_joint2": robot_cfg["joint_pos"][1],
             "fr3_joint3": robot_cfg["joint_pos"][2],
             "fr3_joint4": robot_cfg["joint_pos"][3],  # -1.2,
-            "fr3_joint5": robot_cfg["j setoint_pos"][4],
+            "fr3_joint5": robot_cfg["joint_pos"][4],
             "fr3_joint6": robot_cfg["joint_pos"][5],  # 1.5,
             "fr3_joint7": robot_cfg["joint_pos"][6],
         },
@@ -192,7 +193,7 @@ class roboticUSEnvCfg(DirectRLEnvCfg):
 
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(
-        num_envs=100, env_spacing=4.0, replicate_physics=False
+        num_envs=100, env_spacing=2.0, replicate_physics=False
     )
 
 
@@ -269,6 +270,9 @@ class roboticUSEnv(DirectRLEnv):
             img_thickness = us_cfg["image_3D_thickness"]
         else:
             img_thickness = 1
+
+        roll_adj = scene_cfg["motion_planning"]["US_roll_adj"]
+
         self.US_slicer = USSlicer(
             us_cfg,
             label_map_list,
@@ -283,6 +287,7 @@ class roboticUSEnv(DirectRLEnv):
             us_cfg["image_size"],
             us_cfg["resolution"],
             img_thickness=img_thickness,
+            roll_adj=roll_adj,
             visualize=self.sim_cfg["vis_seg_map"],
             sim_mode=scene_cfg["sim"]["us"],
             us_generative_cfg=us_generative_cfg,
@@ -381,7 +386,7 @@ class roboticUSEnv(DirectRLEnv):
         vertebra_2d_pos = self.vertebra_viewer.human_to_ver_per_envs[:, [0, 2]]
         US_target_2d_pos = vertebra_2d_pos + vertebra_to_US_2d_pos.unsqueeze(0)
 
-        US_target_2d_angle = self.goal_cmd_pose[:, 2:3] * torch.ones_like(
+        US_target_2d_angle = scene_cfg["motion_planning"]["US_target_2d_angle"] * torch.ones_like(
             vertebra_2d_pos[:, 0:1]
         )
 
@@ -969,6 +974,6 @@ class roboticUSEnv(DirectRLEnv):
                 if not os.path.exists(record_path):
                     os.makedirs(record_path)
                 self.cmd_pose_trajs = torch.stack(self.cmd_pose_trajs, dim=1)
-                torch.save(self.cmd_pose_trajs, record_path + "cmd_pose_trajs_yu.pt")
-                torch.save(self.goal_cmd_pose, record_path + "goal_cmd_pose_yu.pt")
+                torch.save(self.cmd_pose_trajs, record_path + "cmd_pose_trajs.pt")
+                torch.save(self.goal_cmd_pose, record_path + "goal_cmd_pose.pt")
             self.cmd_pose_trajs = [self.cur_cmd_pose]

@@ -442,16 +442,13 @@ def run(sim: SimulationContext, scene: InteractiveScene, label_map_list: list, c
             ee_quat_w = quat_from_matrix(us_rotmat_w)
 
 
-            # Force the surface planner command to a fixed target (x, z, angle) every episode reset
-            US_slicer.current_x_z_x_angle_cmd[:] = fixed_xz_target
-            US_slicer.current_x_z_x_angle_cmd = torch.clamp(
-                US_slicer.current_x_z_x_angle_cmd,
-                torch.tensor(US_slicer.x_z_range[0], device=sim.device, dtype=torch.float32),
-                torch.tensor(US_slicer.x_z_range[1], device=sim.device, dtype=torch.float32),
-            )
+            # Force the surface planner command to a fixed target (x, z, angle).
+            # No policy action is applied: the probe target is purely geometric.
+            xz_low = torch.tensor(US_slicer.x_z_range[0], device=sim.device, dtype=torch.float32)
+            xz_high = torch.tensor(US_slicer.x_z_range[1], device=sim.device, dtype=torch.float32)
 
-            # Keep a fixed target during the episode (no incremental updates)
-            US_slicer.current_x_z_x_angle_cmd[:] = fixed_xz_target
+            fixed_xz_target_clamped = torch.clamp(fixed_xz_target, xz_low, xz_high)
+            US_slicer.current_x_z_x_angle_cmd[:] = fixed_xz_target_clamped
 
             US_slicer.slice_US(world_to_human_pos, world_to_human_rot, ee_pos_w, ee_quat_w)
             if sim_cfg["vis_us"]:

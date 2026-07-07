@@ -269,7 +269,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
         start = time.time()
 
         # Apply random action
-        cmd = torch.tensor([0.0, 0.0, 0.0], device=sim.device).repeat(scene.num_envs, 1)
+        cmd = torch.rand([scene.num_envs, 3], device=sim.device)
         US_slicer.update_cmd(cmd)
 
         # get human frame
@@ -287,7 +287,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene, lab
         # update image simulation
         US_slicer.slice_US(world_to_human_pos, world_to_human_rot, US_ee_pose_w[:, 0:3], US_ee_pose_w[:, 3:7])
         if sim_cfg['vis_us']:
-            US_slicer.visualize(key="US", first_n=1)
+            US_slicer.visualize(key="US", first_n=5)
         
         # compute frame in root frame
         if sim_cfg['vis_seg_map']:

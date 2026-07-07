@@ -1,0 +1,9 @@
+nohup: ignoring input
+============================================================
+Starting training run with seed 3
+Run dir    : /home/idsia/SonoGym/logs/skrl/surgery_large/PPO_surgery_large_seed3
+Experiment : PPO_surgery_large_seed3
+Log        : /home/idsia/SonoGym/logs/skrl/surgery_large/PPO_surgery_large_seed3/logs/stdout.log
+============================================================
+./sweep.sh: line 28: 255421 Killed                  python "${TRAIN_SCRIPT}" --task "${TASK_NAME}" --headless --device cuda:0 > "${STDOUT_LOG}" 2>&1
+Restoring original agent config...

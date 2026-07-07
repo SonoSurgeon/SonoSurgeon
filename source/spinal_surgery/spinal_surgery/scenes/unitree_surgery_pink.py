@@ -62,6 +62,7 @@ from spinal_surgery.assets.unitreeG1 import *
 from spinal_surgery.assets.unitreeH1 import *
 from spinal_surgery.lab.sensors.ultrasound.US_slicer import USSlicer
 from spinal_surgery.lab.kinematics.vertebra_viewer import VertebraViewer
+from spinal_surgery.lab.kinematics.gt_motion_generator import GTDiscreteMotionGenerator
 from ruamel.yaml import YAML
 from scipy.spatial.transform import Rotation as R
 import torch
@@ -505,7 +506,7 @@ def run(sim: SimulationContext, scene: InteractiveScene, label_map_list: list, c
     # USSlicer
     label_convert_map = YAML().load(open(f"{PACKAGE_DIR}/lab/sensors/cfgs/label_conversion.yaml", "r"))
     raw = YAML().load(open(f"{PACKAGE_DIR}/lab/sensors/cfgs/us_cfg.yaml", "r"))
-    DOWNSAMPLE = 4
+    DOWNSAMPLE = 1
     us_cfg = make_us_cfg_for_scene(raw, downsample=DOWNSAMPLE)
     sim_cfg = scene_cfg["sim"]
 
@@ -535,6 +536,18 @@ def run(sim: SimulationContext, scene: InteractiveScene, label_map_list: list, c
         if_vis=True,
         res=label_res,
         device=sim.device,
+    )
+
+    goal_pose_ph = motion_plan_cfg["patient_xz_goal"]  # [x, z, roll] in human frame (y is ignored)
+
+    gt_motion_generator = GTDiscreteMotionGenerator(
+        goal_cmd_pose=goal_pose_ph,
+        scale=torch.tensor(motion_plan_cfg["scale"], device=sim.device),
+        num_envs=scene.num_envs,
+        surface_map_list=US_slicer.surface_map_list,
+        surface_normal_list=US_slicer.surface_normal_list,
+        label_res=label_res,
+        US_height=US_slicer.height,
     )
 
     # LEFT command target on patient (human frame, from YAML)
@@ -950,7 +963,7 @@ def run(sim: SimulationContext, scene: InteractiveScene, label_map_list: list, c
                 tasks=[left_task, right_task],
                 dt=sim_dt,
                 solver="quadprog",
-                damping=5e-2,
+                damping=1e-3,
                 safety_break=False,
             )
             configuration.integrate_inplace(vel, sim_dt)
@@ -1068,7 +1081,21 @@ def run(sim: SimulationContext, scene: InteractiveScene, label_map_list: list, c
                     fig.tight_layout()
                     fig.canvas.draw()
                     fig.canvas.flush_events()
-        
+
+        cur_human_ee_pos, cur_human_ee_quat = subtract_frame_transforms(
+            world_to_human_pos,
+            world_to_human_rot,
+            left_us_pos_w,
+            left_us_quat_w,
+        )
+
+        cur_cmd_pose = gt_motion_generator.human_cmd_state_from_ee_pose(
+            cur_human_ee_pos, cur_human_ee_quat
+        )
+
+        if step_i % 50 == 0:
+            print(f"current position on back: {cur_cmd_pose}")
+
         print_wr(step_i)
         # ---------------------------------------------------------
         # End-of-episode print: final manipulability values

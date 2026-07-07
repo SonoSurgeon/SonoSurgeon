@@ -40,6 +40,7 @@ class USSlicer(LabelImgSlicer):
         plane_axes={"h": [0, 0, 1], "w": [1, 0, 0]},
         sim_mode="conv",
         us_generative_cfg=None,
+        thickness_offsets=None,
     ):
         """
         label maps: list of label maps (3D volumes)
@@ -77,6 +78,7 @@ class USSlicer(LabelImgSlicer):
             height_img,
             visualize,
             plane_axes,
+            thickness_offsets,
         )
 
         self.sim_mode = sim_mode

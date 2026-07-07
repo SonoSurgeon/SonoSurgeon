@@ -1,0 +1,85 @@
+# -----------------------------------------------------------------------------
+# CEM probe-target optimization config
+# -----------------------------------------------------------------------------
+
+task: "Isaac-robot-US-guided-surgery-G1-pink-v0" # "Isaac-robot-US-guided-surgery-G1-pink-v0" "Isaac-robot-US-guided-surgery-v0"
+
+policy_path: "/home/idsia/SonoGym/source/spinal_surgery/spinal_surgery/policies/surgery_G1_pink_large_lr13.pt" # surgery_policy_G1.pt
+
+output_dir: "/home/idsia/SonoGym/cem_probe_results"
+
+num_envs: 64
+
+seed: 1
+
+# -----------------------------------------------------------------------------
+# Probe target optimization space
+# Ottimizziamo theta = [x_shift, z_shift, yaw]
+# Coerente con training:
+# x_shift = -30 + [-25, 20] -> [-55, -10]
+# z_shift =   0 + [-25, 25] -> [-25, 25]
+# yaw     = 1.57 +/- 0.2    -> [1.37, 1.77]
+# -----------------------------------------------------------------------------
+search_space:
+  x_shift:
+    min: -55.0
+    max: -10.0
+
+  z_shift:
+    min: -25.0
+    max: 25.0
+
+  yaw:
+    min: 1.37
+    max: 1.77
+
+cem:
+  num_iterations: 12
+  population_size: 28
+  elite_frac: 0.20
+
+  init_mean: [-30.0, 0.0, 1.57]
+
+  init_std: [16.0, 16.0, 0.16]
+
+  min_std: [0.35, 0.35, 0.005]
+
+  # Aggiornamento deciso, ma non troppo instabile
+  alpha: 0.75
+
+evaluation:
+  rollouts_per_candidate: 64 # 64
+
+  disable_probe_target_randomization: true
+  disable_roll_randomization: true
+  disable_yaw_randomization: true
+
+  US_roll_adj: -0.4
+
+  use_reward_plus_half_sr_percent: true
+  use_safety_ratio_only: false
+  use_mean_reward_only: false
+  use_er: false
+
+  success:
+    pos_thr_mm: 7.5
+    angle_thr_deg: 10.0
+
+  ood:
+    pos_thr_mm: 20.0
+    angle_thr_deg: 20.0
+
+  score_weights:
+    success_bonus: 1000.0
+    ood_penalty: 500.0
+
+logging:
+  save_every_iteration: true
+  print_every_candidate: true
+
+  save_csv: true
+
+  use_wandb: True
+  wandb_project: "cem-probe-optimization"
+  wandb_entity: null
+  wandb_run_name: "surgery_cem_probe"

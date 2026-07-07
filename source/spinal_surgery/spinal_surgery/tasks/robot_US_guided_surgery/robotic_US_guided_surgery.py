@@ -56,7 +56,6 @@ from spinal_surgery.lab.kinematics.gt_motion_generator import (
 import cProfile
 from gymnasium.spaces import Dict
 import wandb
-from isaacsim.util.debug_draw import _debug_draw 
 
 scene_cfg = YAML().load(
     open(
@@ -64,7 +63,10 @@ scene_cfg = YAML().load(
         "r",
     )
 )
-# TODO: fix observation scale
+
+run_type = str(scene_cfg.get("run", "standard_surgery")).lower()
+
+
 if scene_cfg["sim"]["us"] == "net":
     scene_cfg["observation"]["scale"] = scene_cfg["observation"]["scale_net"]
 us_cfg = YAML().load(open(f"{PACKAGE_DIR}/lab/sensors/cfgs/us_cfg.yaml", "r"))
@@ -206,6 +208,7 @@ scale = 1 / label_res
 CAMERA_EYE = (1.36, 0.475, 1.23)
 CAMERA_TARGET = (0.489, 0.158, 0.855)
 
+US_obs_style = scene_cfg["observation"]["style"]
 
 @configclass
 class roboticUSGuidedSurgeryCfg(DirectRLEnvCfg):
@@ -213,12 +216,8 @@ class roboticUSGuidedSurgeryCfg(DirectRLEnvCfg):
     decimation = 2
     episode_length_s = scene_cfg["sim"]["episode_length"]  # 5 # 300
     action_scale = 1
-    action_space = 6
-    observation_space = [
-        us_cfg["image_3D_thickness"] // scene_cfg["observation"]["downsample"],
-        200 // scene_cfg["observation"]["downsample"],
-        150 // scene_cfg["observation"]["downsample"],
-    ]
+    action_space = 5
+    observation_space = [1, 1, 1] #placeholder
     state_space = 0
     observation_scale = scene_cfg["observation"]["scale"]
 
@@ -325,45 +324,112 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
             .reshape((1, -1))
             .repeat(self.scene.num_envs, 1)
         )
-        if scene_cfg["observation"]["3D"]:
-            img_thickness = us_cfg["image_3D_thickness"]
+
+
+        self.motion_plan_cfg = scene_cfg["motion_planning"][run_type]
+            
+        if US_obs_style == "small":
+
+            thickness_offsets = None
+
+            if scene_cfg["observation"]["3D"]:
+                img_thickness = us_cfg["image_3D_thickness"]
+            else:
+                img_thickness = 1
+
+            # down sample
+            res = scene_cfg["observation"]["downsample"]
+
+            us_cfg["image_size"] = [
+                int(us_cfg["image_size"][0] / res),
+                int(us_cfg["image_size"][1] / res),
+            ]
+
+            us_cfg["system_params"]["sx_E"] = us_cfg["system_params"]["sx_E"] / np.sqrt(res)
+            us_cfg["system_params"]["sy_E"] = us_cfg["system_params"]["sy_E"] / np.sqrt(res)
+            us_cfg["system_params"]["sx_B"] = us_cfg["system_params"]["sx_B"] / np.sqrt(res)
+            us_cfg["system_params"]["sy_B"] = us_cfg["system_params"]["sy_B"] / np.sqrt(res)
+            us_cfg["system_params"]["I0"] *= np.sqrt(res)
+            us_cfg["E_S_ratio"] /= np.sqrt(res)
+
+            img_thickness = max(int(img_thickness // res), 1)
+            us_cfg["resolution"] = us_cfg["resolution"] * res
+
+            self.us_img_thickness = img_thickness
+            self.us_img_height = 200 // res
+            self.us_img_width = 150 // res
+
+            self.cfg.observation_space[0] = self.us_img_thickness
+            self.cfg.observation_space[1] = self.us_img_height
+            self.cfg.observation_space[2] = self.us_img_width
+
+            self.US_slicer = USSlicer(
+                us_cfg,
+                label_map_list,
+                ct_map_list,
+                self.sim_cfg["if_use_ct"],
+                human_stl_list,
+                self.scene.num_envs,
+                self.sim_cfg["patient_xz_range"],
+                self.sim_cfg["patient_xz_init_range"][0],
+                self.sim.device,
+                label_convert_map,
+                us_cfg["image_size"],
+                us_cfg["resolution"],
+                img_thickness=img_thickness,
+                roll_adj=self.motion_plan_cfg["US_roll_adj"],
+                visualize=self.sim_cfg["vis_seg_map"],
+                sim_mode=scene_cfg["sim"]["us"],
+                us_generative_cfg=us_generative_cfg,
+            )
+
+        elif US_obs_style == "large":
+            
+            if scene_cfg["observation"]["3D"]:
+                img_thickness = scene_cfg["observation"]["image_3D_thickness"]
+            else:
+                img_thickness = 1
+                
+            thickness_offsets = scene_cfg["observation"].get("image_3D_offsets", None)
+            if thickness_offsets is not None and len(thickness_offsets) != img_thickness:
+                raise ValueError(
+                    f"image_3D_offsets length ({len(thickness_offsets)}) must match image_3D_thickness ({img_thickness})"
+                )
+                
+            # Single full-resolution US stream shared by probe policy and surgery policy.
+            self.us_img_height = int(us_cfg["image_size"][0])
+            self.us_img_width = int(us_cfg["image_size"][1])
+            self.us_img_thickness = int(img_thickness)
+
+            self.cfg.observation_space[0] = self.us_img_thickness
+            self.cfg.observation_space[1] = self.us_img_height
+            self.cfg.observation_space[2] = self.us_img_width
+
+            self.US_slicer = USSlicer(
+                us_cfg,
+                label_map_list,
+                ct_map_list,
+                self.sim_cfg["if_use_ct"],
+                human_stl_list,
+                self.scene.num_envs,
+                self.sim_cfg["patient_xz_range"],
+                self.sim_cfg["patient_xz_init_range"][0],
+                self.sim.device,
+                label_convert_map,
+                [self.us_img_height, self.us_img_width],
+                us_cfg["resolution"],
+                img_thickness=self.us_img_thickness,
+                thickness_offsets=thickness_offsets,
+                roll_adj=self.motion_plan_cfg["US_roll_adj"],
+                visualize=self.sim_cfg["vis_seg_map"],
+                sim_mode=scene_cfg["sim"]["us"],
+                us_generative_cfg=us_generative_cfg,
+            )
+
         else:
-            img_thickness = 1
+            raise ValueError(f"Unsupported observation style: {US_obs_style}, either 'small' or 'large' expected.")
 
-        # down sample
-        res = scene_cfg["observation"]["downsample"]
-        us_cfg["image_size"] = [
-            int(us_cfg["image_size"][0] / res),
-            int(us_cfg["image_size"][1] / res),
-        ]
-        us_cfg["system_params"]["sx_E"] = us_cfg["system_params"]["sx_E"] / np.sqrt(res)
-        us_cfg["system_params"]["sy_E"] = us_cfg["system_params"]["sy_E"] / np.sqrt(res)
-        us_cfg["system_params"]["sx_B"] = us_cfg["system_params"]["sx_B"] / np.sqrt(res)
-        us_cfg["system_params"]["sy_B"] = us_cfg["system_params"]["sy_B"] / np.sqrt(res)
-        us_cfg["system_params"]["I0"] *= np.sqrt(res)
-        us_cfg["E_S_ratio"] /= np.sqrt(res)
-        img_thickness = max(int(img_thickness // res), 1)
-        us_cfg["resolution"] = us_cfg["resolution"] * res
 
-        self.US_slicer = USSlicer(
-            us_cfg,
-            label_map_list,
-            ct_map_list,
-            self.sim_cfg["if_use_ct"],
-            human_stl_list,
-            self.scene.num_envs,
-            self.sim_cfg["patient_xz_range"],
-            self.sim_cfg["patient_xz_init_range"][0],
-            self.sim.device,
-            label_convert_map,
-            us_cfg["image_size"],
-            us_cfg["resolution"],
-            img_thickness=img_thickness,
-            roll_adj=scene_cfg["motion_planning"]["US_roll_adj"],
-            visualize=self.sim_cfg["vis_seg_map"],
-            sim_mode=scene_cfg["sim"]["us"],
-            us_generative_cfg=us_generative_cfg,
-        )
         self.US_slicer.current_x_z_x_angle_cmd = (
             self.init_cmd_pose_min + self.init_cmd_pose_max
         ) / 2
@@ -373,7 +439,7 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         )  # these are already the initial poses
 
         # construct ground truth motion generator
-        motion_plan_cfg = scene_cfg["motion_planning"]
+        
         self.vertebra_viewer = VertebraViewer(
             self.scene.num_envs,
             len(human_usd_list),
@@ -384,6 +450,18 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
             self.sim.device,
         )
 
+        self.goal_pose_ph = self.motion_plan_cfg["patient_xz_goal"]
+
+        self.gt_motion_generator = GTDiscreteMotionGenerator(
+            goal_cmd_pose=self.goal_pose_ph,
+            scale=torch.tensor(self.motion_plan_cfg["scale"], device=self.sim.device),
+            num_envs=self.scene.num_envs,
+            surface_map_list=self.US_slicer.surface_map_list,
+            surface_normal_list=self.US_slicer.surface_normal_list,
+            label_res=label_res,
+            US_height=self.US_slicer.height,
+        )
+
         # change observation space to image
         # self.observation_space = gym.spaces.Box(
         #     low=0,
@@ -391,9 +469,84 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         #     shape=(self.cfg.observation_space[0], self.cfg.observation_space[1], self.cfg.observation_space[2]),
         #     dtype=np.uint8,
         # )
+
+        # Robot US spawn position randomization from YAML
+        robot_rand_cfg = robot_cfg.get("randomization", {})
+        robot_rand_pos_cfg = robot_rand_cfg["position"]
+
+        robot_rand_pos_min = np.array(
+            [
+                float(robot_rand_pos_cfg["x"][0]),
+                float(robot_rand_pos_cfg["y"][0]),
+                float(robot_rand_pos_cfg["z"][0]),
+            ],
+            dtype=np.float32,
+        )
+        robot_rand_pos_max = np.array(
+            [
+                float(robot_rand_pos_cfg["x"][1]),
+                float(robot_rand_pos_cfg["y"][1]),
+                float(robot_rand_pos_cfg["z"][1]),
+            ],
+            dtype=np.float32,
+        )
+
+        self.robot_base_pos_nominal = torch.tensor(
+            np.array(robot_cfg["pos"], dtype=np.float32),
+            device=self.sim.device,
+            dtype=torch.float32,
+        )
+
+        self.robot_spawn_pos_rand_min = torch.tensor(
+            robot_rand_pos_min, device=self.sim.device, dtype=torch.float32
+        ).unsqueeze(0).repeat(self.scene.num_envs, 1)
+
+        self.robot_spawn_pos_rand_max = torch.tensor(
+            robot_rand_pos_max, device=self.sim.device, dtype=torch.float32
+        ).unsqueeze(0).repeat(self.scene.num_envs, 1)
+
+        self.if_random_spawn_robot = bool(robot_cfg.get("pose_randomization", False))
+
+        # Drill robot spawn position randomization from YAML
+        robot_drill_rand_cfg = robot_drill_cfg.get("randomization", {})
+        robot_drill_rand_pos_cfg = robot_drill_rand_cfg["position"]
+
+        robot_drill_rand_pos_min = np.array(
+            [
+                float(robot_drill_rand_pos_cfg["x"][0]),
+                float(robot_drill_rand_pos_cfg["y"][0]),
+                float(robot_drill_rand_pos_cfg["z"][0]),
+            ],
+            dtype=np.float32,
+        )
+        robot_drill_rand_pos_max = np.array(
+            [
+                float(robot_drill_rand_pos_cfg["x"][1]),
+                float(robot_drill_rand_pos_cfg["y"][1]),
+                float(robot_drill_rand_pos_cfg["z"][1]),
+            ],
+            dtype=np.float32,
+        )
+
+        self.robot_drill_base_pos_nominal = torch.tensor(
+            np.array(robot_drill_cfg["pos"], dtype=np.float32),
+            device=self.sim.device,
+            dtype=torch.float32,
+        )
+
+        self.robot_drill_spawn_pos_rand_min = torch.tensor(
+            robot_drill_rand_pos_min, device=self.sim.device, dtype=torch.float32
+        ).unsqueeze(0).repeat(self.scene.num_envs, 1)
+
+        self.robot_drill_spawn_pos_rand_max = torch.tensor(
+            robot_drill_rand_pos_max, device=self.sim.device, dtype=torch.float32
+        ).unsqueeze(0).repeat(self.scene.num_envs, 1)
+
+        self.if_random_spawn_robot_drill = bool(robot_drill_cfg.get("pose_randomization", False))
+
         # drill rand
         self.rand_joint_pos_max = (
-            torch.tensor(motion_plan_cfg["joint_pos_rand_max"])
+            torch.tensor(self.motion_plan_cfg["joint_pos_rand_max"])
             .reshape((1, -1))
             .repeat(self.scene.num_envs, 1)
             .to(self.sim.device)
@@ -503,53 +656,119 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
 
         # wandb.init()
         self.num_step = 0
-        
-        #DBG
-        self._dd = _debug_draw.acquire_debug_draw_interface()
-        self._dbg_axis_len = 0.05   # 5 cm
-        self._dbg_axis_w = 3.0      # line width
-        self._dbg_show_env0_only = True
 
-    def _debug_draw_frame_w(self, pos_w: torch.Tensor, quat_wxyz_w: torch.Tensor, axis_len: float):
-        pos_w = pos_w.detach().cpu()
-        quat_wxyz_w = quat_wxyz_w.detach().cpu()
+        # CEM evaluation buffers
+        self.safe_post_count = torch.zeros(self.scene.num_envs, device=self.sim.device)
+        self.total_post_count = torch.zeros(self.scene.num_envs, device=self.sim.device)
 
-        R = matrix_from_quat(quat_wxyz_w)  # (N,3,3) su CPU
+        self.last_episode_safety_ratio = torch.zeros(self.scene.num_envs, device=self.sim.device)
+        self.last_episode_safe_post_count = torch.zeros(self.scene.num_envs, device=self.sim.device)
+        self.last_episode_total_post_count = torch.zeros(self.scene.num_envs, device=self.sim.device)
 
-        x_dir = R[:, :, 0]
-        y_dir = R[:, :, 1]
-        z_dir = R[:, :, 2]
+        self.last_episode_final_pos_err_mm = torch.zeros(self.scene.num_envs, device=self.sim.device)
+        self.last_episode_final_angle_err_deg = torch.zeros(self.scene.num_envs, device=self.sim.device)
 
-        p0 = pos_w
-        px = pos_w + axis_len * x_dir
-        py = pos_w + axis_len * y_dir
-        pz = pos_w + axis_len * z_dir
+    def get_safety_ratio_stats(self):
+        den = torch.clamp(self.total_post_count, min=1.0)
+        sr = self.safe_post_count / den
 
-        starts = torch.cat([p0, p0, p0], dim=0)
-        ends   = torch.cat([px, py, pz], dim=0)
-
-        N = pos_w.shape[0]
-        colors = ([(1,0,0,1)]*N + [(0,1,0,1)]*N + [(0,0,1,1)]*N)
-        widths = [float(self._dbg_axis_w)] * (3*N)
-
-        self._dd.draw_lines(
-            [tuple(v.tolist()) for v in starts],
-            [tuple(v.tolist()) for v in ends],
-            colors,
-            widths,
+        return (
+            sr,
+            self.safe_post_count,
+            self.total_post_count,
         )
+
+
+    def get_last_episode_safety_ratio_stats(self):
+        return (
+            self.last_episode_safety_ratio,
+            self.last_episode_safe_post_count,
+            self.last_episode_total_post_count,
+        )
+
+
+    def get_last_episode_final_metrics(self):
+        return (
+            self.last_episode_final_pos_err_mm,
+            self.last_episode_final_angle_err_deg,
+        )
+
+    def _safe_normalize(self, v: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+        # Normalize vectors safely (batch)
+        return v / torch.clamp(torch.linalg.norm(v, dim=-1, keepdim=True), min=eps)
+
+    def _compute_tip_rp_errors(self) -> None:
+        """
+        Compute tip roll/pitch errors in the trajectory frame.
+        - traj frame: z = traj direction, x/y = stable orthonormal basis
+        - tip frame: z-axis is the drill axis (your convention)
+        - yaw around z (twist) is ignored by taking only roll/pitch from R_rel using ZYX.
+        """
+
+        # traj direction in human frame (N,3)
+        z_traj = self._safe_normalize(self.vertebra_viewer.traj_drct)
+
+        # build a stable traj frame (x_traj, y_traj, z_traj)
+        x0 = torch.tensor([1.0, 0.0, 0.0], device=self.sim.device).reshape(1, 3).repeat(z_traj.shape[0], 1)
+        parallel = torch.abs(torch.sum(x0 * z_traj, dim=-1)) > 0.95
+        if parallel.any():
+            y0 = torch.tensor([0.0, 1.0, 0.0], device=self.sim.device).reshape(1, 3).repeat(z_traj.shape[0], 1)
+            x0[parallel] = y0[parallel]
+
+        x_traj = x0 - torch.sum(x0 * z_traj, dim=-1, keepdim=True) * z_traj
+        x_traj = self._safe_normalize(x_traj)
+        y_traj = torch.cross(z_traj, x_traj, dim=-1)
+        y_traj = self._safe_normalize(y_traj)
+
+        # traj rotation matrix in human frame (columns are basis vectors)
+        R_traj = torch.stack([x_traj, y_traj, z_traj], dim=-1)  # (N,3,3)
+
+        # tip rotation matrix in human frame
+        R_tip = matrix_from_quat(self.human_to_tip_quat)         # (N,3,3)
+
+        # relative rotation expressed in traj frame
+        R_rel = torch.bmm(R_traj.transpose(1, 2), R_tip)         # (N,3,3)
+
+        # Extract roll/pitch from ZYX convention: R = Rz(yaw) * Ry(pitch) * Rx(roll)
+        # yaw is ignored, but roll/pitch are well-defined for the chosen x/y basis.
+        r20 = torch.clamp(-R_rel[:, 2, 0], -1.0, 1.0)
+        pitch = torch.asin(r20)                                  # rad
+        roll  = torch.atan2(R_rel[:, 2, 1], R_rel[:, 2, 2])       # rad
+
+        self.tip_pitch_err_deg = pitch * (180.0 / torch.pi)
+        self.tip_roll_err_deg  = roll  * (180.0 / torch.pi)
 
     def get_US_target_pose(self):
         # compute position change
         vertebra_to_US_2d_pos = torch.tensor(
-            scene_cfg["motion_planning"]["vertebra_to_US_2d_pos"]
+            self.motion_plan_cfg["vertebra_to_US_2d_pos"]
         ).to(self.sim.device)
-        rand_disturbance = (
-            torch.rand((self.scene.num_envs, 2), device=self.sim.device)
-            * 2
-            * scene_cfg["motion_planning"]["vertebra_to_US_rand_max"]
-            - scene_cfg["motion_planning"]["vertebra_to_US_rand_max"]
-        )
+
+        rand_cfg = self.motion_plan_cfg.get("vertebra_to_US_rand_range", {})
+
+        rand_min = torch.tensor(
+            [
+                float(rand_cfg.get("x", [0.0, 0.0])[0]),
+                float(rand_cfg.get("z", [0.0, 0.0])[0]),
+            ],
+            device=self.sim.device,
+            dtype=torch.float32,
+        ).reshape(1, 2)
+
+        rand_max = torch.tensor(
+            [
+                float(rand_cfg.get("x", [0.0, 0.0])[1]),
+                float(rand_cfg.get("z", [0.0, 0.0])[1]),
+            ],
+            device=self.sim.device,
+            dtype=torch.float32,
+        ).reshape(1, 2)
+
+        rand_disturbance = rand_min + torch.rand(
+            (self.scene.num_envs, 2),
+            device=self.sim.device,
+        ) * (rand_max - rand_min)
+
         vertebra_2d_pos = self.vertebra_viewer.human_to_ver_per_envs[:, [0, 2]]
         US_target_2d_pos = (
             vertebra_2d_pos + vertebra_to_US_2d_pos.unsqueeze(0) + rand_disturbance
@@ -559,23 +778,33 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         rand_dist_angle = (
             torch.rand((self.scene.num_envs, 1), device=self.sim.device)
             * 2
-            * scene_cfg["motion_planning"]["US_roll_rand_max"]
-            - scene_cfg["motion_planning"]["US_roll_rand_max"]
+            * self.motion_plan_cfg["US_roll_rand_max"]
+            - self.motion_plan_cfg["US_roll_rand_max"]
         )
         self.US_slicer.roll_adj = (
-            scene_cfg["motion_planning"]["US_roll_adj"]
+            self.motion_plan_cfg["US_roll_adj"]
             * torch.ones_like(vertebra_2d_pos[:, 0:1])
             + rand_dist_angle
         )
 
-        rand_dist_angle = (
+        US_yaw_rand_max = float(
+            self.motion_plan_cfg.get(
+                "US_yaw_rand_max",
+                self.motion_plan_cfg.get("US_roll_rand_max", 0.0),
+            )
+        )
+        rand_dist_yaw = (
             torch.rand((self.scene.num_envs, 1), device=self.sim.device)
             * 2
-            * scene_cfg["motion_planning"]["US_roll_rand_max"]
-            - scene_cfg["motion_planning"]["US_roll_rand_max"]
+            * US_yaw_rand_max
+            - US_yaw_rand_max
+        )
+        US_target_2d_angle_base = float(
+            self.motion_plan_cfg.get("US_target_2d_angle", 1.57)
         )
         US_target_2d_angle = (
-            1.57 * torch.ones_like(vertebra_2d_pos[:, 0:1]) + rand_dist_angle
+            US_target_2d_angle_base * torch.ones_like(vertebra_2d_pos[:, 0:1])
+            + rand_dist_yaw
         )
 
         US_target_2d = torch.cat([US_target_2d_pos, US_target_2d_angle], dim=-1)
@@ -726,6 +955,19 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         ]
         self.num_step += 1
 
+        cur_human_ee_pos, cur_human_ee_quat = subtract_frame_transforms(
+            self.human_world_poses[:, 0:3],
+            self.human_world_poses[:, 3:7],
+            self.US_ee_pose_w[:, 0:3],
+            self.US_ee_pose_w[:, 3:7],
+        )
+
+        cur_cmd_pose = self.gt_motion_generator.human_cmd_state_from_ee_pose(
+            cur_human_ee_pos, cur_human_ee_quat
+        )
+
+        # print(f"current position on back: {cur_cmd_pose}")
+
         if self.observation_mode == "US":
             self.US_slicer.slice_US(
                 self.world_to_human_pos,
@@ -789,49 +1031,6 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         }
 
         self.check_nan()
-        
-        """
-
-        self.drill_ee_pose_w = self.robot_drill.data.body_state_w[
-            :, self.robot_drill_entity_cfg.body_ids[-1], 0:7
-        ]
-
-        # --- debug draw: EE + TIP (world)
-        if self._dbg_show_env0_only:
-            idx = torch.tensor([0], device=self.sim.device)
-        else:
-            idx = torch.arange(self.scene.num_envs, device=self.sim.device)
-
-        # clear old drawings
-        self._dd.clear_lines()
-        self._dd.clear_points()
-
-        # US EE frame (world)
-        us_pos_w = self.US_ee_pose_w[idx, 0:3]
-        us_quat_wxyz_w = self.US_ee_pose_w[idx, 3:7]
-        self._debug_draw_frame_w(us_pos_w, us_quat_wxyz_w, self._dbg_axis_len)
-
-        # Drill EE frame (world)
-        dr_pos_w = self.drill_ee_pose_w[idx, 0:3]
-        dr_quat_wxyz_w = self.drill_ee_pose_w[idx, 3:7]
-        self._debug_draw_frame_w(dr_pos_w, dr_quat_wxyz_w, self._dbg_axis_len)
-
-        # Tip frame (world): combine drill_ee_pose_w with drill_to_tip (in EE frame)
-        tip_pos_w, tip_quat_w = combine_frame_transforms(
-            dr_pos_w,
-            dr_quat_wxyz_w,
-            self.drill_to_tip_pos[idx],
-            self.drill_to_tip_quat[idx],
-        )
-        self._debug_draw_frame_w(tip_pos_w, tip_quat_w, self._dbg_axis_len)
-
-        # Optionale: un punto sul tip
-        self._dd.draw_points(
-            [tuple(v.tolist()) for v in tip_pos_w],
-            [(1.0, 1.0, 0.0, 1.0)] * tip_pos_w.shape[0],
-            [8.0] * tip_pos_w.shape[0],
-        )
-        """
 
         return observations
 
@@ -860,8 +1059,15 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         safe_close = torch.logical_and(
             safe_close, self.tip_pos_along_traj < self.vertebra_viewer.traj_half_length
         )
-        actions[safe_close, 0:2] *= 0.2
-        actions[safe_close, 3:] *= 0.2
+
+        actions5 = actions
+
+        actions6 = torch.zeros((actions5.shape[0], 6), device=actions5.device, dtype=actions5.dtype)
+        actions6[:, 0:5] = actions5
+        actions6[:, 5] = 0.0  # yaw non attuato
+
+        actions6[safe_close, 0:2] *= 0.2
+        actions6[safe_close, 3:] *= 0.2
 
         # action in ee space
         tip_to_next_tip_pos, tip_to_next_tip_quat = apply_delta_pose(
@@ -869,7 +1075,7 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
             torch.tensor([[1.0, 0.0, 0.0, 0.0]])
             .to(self.scene.device)
             .repeat(self.scene.num_envs, 1),
-            actions,
+            actions6,
         )
         tip_pos_b, tip_quat_b = combine_frame_transforms(
             self.drill_ee_pos_b,
@@ -979,6 +1185,17 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
         self.ever_unsafe[unsafe] = 1
         always_safe = torch.logical_not(self.ever_unsafe)
 
+
+        # CEM safety-ratio counters
+        # Count how often the drill is in the post-entry region and still safe.
+        post_mask = torch.logical_and(
+            self.tip_pos_along_traj > -self.safe_height,
+            self.tip_pos_along_traj <= self.vertebra_viewer.traj_half_length,
+        )
+
+        self.total_post_count += post_mask.to(torch.float32)
+        self.safe_post_count += torch.logical_and(post_mask, safe_close).to(torch.float32)
+
         # reward insertion
         always_safe_and_close = torch.logical_and(always_safe, safe_close)
         self.max_tip_pos_along_traj = torch.maximum(
@@ -1077,8 +1294,14 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
                 self.tip_pos_along_traj_trajs = []
             if not hasattr(self, "tip_to_traj_dist_trajs"):
                 self.tip_to_traj_dist_trajs = []
+            if not hasattr(self, "tip_roll_err_deg_trajs"):
+                self.tip_roll_err_deg_trajs = []
+            if not hasattr(self, "tip_pitch_err_deg_trajs"):
+                self.tip_pitch_err_deg_trajs = []
             self.tip_pos_along_traj_trajs.append(self.tip_pos_along_traj)
             self.tip_to_traj_dist_trajs.append(self.tip_to_traj_dist)
+            self.tip_roll_err_deg_trajs.append(self.tip_roll_err_deg)
+            self.tip_pitch_err_deg_trajs.append(self.tip_pitch_err_deg)
 
         return reward
 
@@ -1179,6 +1402,8 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
                 self.human_to_tip_pos, self.human_to_tip_quat
             )
         )
+        
+        self._compute_tip_rp_errors()
 
     def reset_controllers(self):
         self.pose_diff_ik_controller.reset()
@@ -1209,6 +1434,49 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
     def _reset_idx(self, env_ids: Sequence[int] | None):
         if env_ids is None:
             env_ids = self.robot._ALL_INDICES
+
+        # ------------------------------------------------------------------
+        # Save last-episode metrics before Isaac resets the environments.
+        # Used by CEM evaluation.
+        # ------------------------------------------------------------------
+        env_ids_tensor = torch.as_tensor(env_ids, device=self.sim.device, dtype=torch.long)
+
+        if hasattr(self, "tip_to_traj_dist") and hasattr(self, "traj_to_tip_sin"):
+            final_angle_error_deg = torch.asin(
+                torch.clamp(torch.abs(self.traj_to_tip_sin[env_ids_tensor]), 0.0, 1.0)
+            ) * 180.0 / torch.pi
+
+            self.last_episode_final_pos_err_mm[env_ids_tensor] = (
+                self.tip_to_traj_dist[env_ids_tensor] * 1000.0
+            )
+
+            self.last_episode_final_angle_err_deg[env_ids_tensor] = final_angle_error_deg
+
+        if hasattr(self, "safe_post_count") and hasattr(self, "total_post_count"):
+            den = torch.clamp(self.total_post_count[env_ids_tensor], min=1.0)
+
+            self.last_episode_safety_ratio[env_ids_tensor] = (
+                self.safe_post_count[env_ids_tensor] / den
+            )
+
+            self.last_episode_safe_post_count[env_ids_tensor] = self.safe_post_count[env_ids_tensor]
+            self.last_episode_total_post_count[env_ids_tensor] = self.total_post_count[env_ids_tensor]
+
+        # Log metrics from the episode that has just ended,
+        # before resetting the environment state.
+        if bool(scene_cfg.get("use_wandb", False)) and hasattr(self, "total_rewards"):
+            env_ids_tensor = torch.as_tensor(env_ids, device=self.sim.device, dtype=torch.long)
+
+            final_angular_error_deg = torch.asin(
+                torch.clamp(torch.abs(self.traj_to_tip_sin[env_ids_tensor]), 0.0, 1.0)
+            ) * 180.0 / torch.pi
+
+            wandb.log({
+                "Total reward": self.total_rewards[env_ids_tensor].mean().item(),
+                "Final radial error mm": (self.tip_to_traj_dist[env_ids_tensor].mean() * 1000.0).item(),
+                "Final angular error deg": final_angular_error_deg.mean().item(),
+            })
+
         super()._reset_idx(env_ids)
 
         # reconstruct random maps
@@ -1217,6 +1485,28 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
 
         joint_pos = self.robot.data.default_joint_pos.clone()
         joint_vel = self.robot.data.default_joint_vel.clone()
+
+
+        if self.if_random_spawn_robot:
+            # Randomize robot_US spawn position around nominal base position for all envs
+            rand_u = torch.rand((self.scene.num_envs, 3), device=self.sim.device)
+            rand_offset = self.robot_spawn_pos_rand_min + rand_u * (
+                self.robot_spawn_pos_rand_max - self.robot_spawn_pos_rand_min
+            )
+
+            # Root pose must be written in WORLD frame
+            rand_base_pos_world = (
+                self.scene.env_origins
+                + self.robot_base_pos_nominal.unsqueeze(0)
+                + rand_offset
+            )
+
+            root_state = self.robot.data.default_root_state.clone()
+            root_state[:, 0:3] = rand_base_pos_world
+
+            # Keep default orientation and velocities unchanged
+            self.robot.write_root_state_to_sim(root_state)
+
         self.robot.write_joint_state_to_sim(joint_pos, joint_vel)
         self.robot.reset()
         self.robot.set_joint_position_target(
@@ -1235,6 +1525,26 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
             - 1
         )
         rand_joint_pos = rand_joint_pos * self.rand_joint_pos_max
+
+        if self.if_random_spawn_robot_drill:
+            # Randomize robot_drill spawn position around nominal base position for all envs
+            rand_u = torch.rand((self.scene.num_envs, 3), device=self.sim.device)
+            rand_offset = self.robot_drill_spawn_pos_rand_min + rand_u * (
+                self.robot_drill_spawn_pos_rand_max - self.robot_drill_spawn_pos_rand_min
+            )
+
+            # Root pose must be written in WORLD frame
+            rand_base_pos_world = (
+                self.scene.env_origins
+                + self.robot_drill_base_pos_nominal.unsqueeze(0)
+                + rand_offset
+            )
+
+            root_state = self.robot_drill.data.default_root_state.clone()
+            root_state[:, 0:3] = rand_base_pos_world
+
+            # Keep default orientation and velocities unchanged
+            self.robot_drill.write_root_state_to_sim(root_state)
 
         self.robot_drill.write_joint_state_to_sim(joint_pos + rand_joint_pos, joint_vel)
         self.robot_drill.reset()
@@ -1297,9 +1607,13 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
 
         # if hasattr(self, "total_costs") and torch.abs(self.total_rewards.mean()) > 0:
         #     wandb.log({"total_cost": self.total_costs.mean().item()})
+
         self.total_rewards = torch.zeros(self.scene.num_envs, device=self.sim.device)
         self.total_costs = torch.zeros(self.scene.num_envs, device=self.sim.device)
         self.last_close = torch.zeros(self.scene.num_envs, device=self.sim.device)
+        # Reset CEM evaluation counters for the new episode.
+        self.safe_post_count[env_ids_tensor] = 0.0
+        self.total_post_count[env_ids_tensor] = 0.0
 
         # record information
         ones = torch.ones((self.scene.num_envs,), device=self.sim.device)
@@ -1325,8 +1639,15 @@ class roboticUSGuidedSurgeryEnv(DirectRLEnv):
                 torch.save(self.tip_pos_along_traj_trajs, record_path + "tip_pos_along_traj.pt")
                 self.tip_to_traj_dist_trajs = torch.stack(self.tip_to_traj_dist_trajs, dim=1)
                 torch.save(self.tip_to_traj_dist_trajs, record_path + "tip_to_traj_dist.pt")
+                self.tip_roll_err_deg_trajs = torch.stack(self.tip_roll_err_deg_trajs, dim=1)
+                torch.save(self.tip_roll_err_deg_trajs, record_path + "tip_roll_err_deg.pt")
+
+                self.tip_pitch_err_deg_trajs = torch.stack(self.tip_pitch_err_deg_trajs, dim=1)
+                torch.save(self.tip_pitch_err_deg_trajs, record_path + "tip_pitch_err_deg.pt")
             self.tip_pos_along_traj_trajs = [self.tip_pos_along_traj]
             self.tip_to_traj_dist_trajs = [self.tip_to_traj_dist]
+            self.tip_roll_err_deg_trajs = [self.tip_roll_err_deg]
+            self.tip_pitch_err_deg_trajs = [self.tip_pitch_err_deg]
 
     def check_nan(self):
         if torch.isnan(self.US_ee_pos_b).any() or torch.isnan(self.US_ee_quat_b).any():

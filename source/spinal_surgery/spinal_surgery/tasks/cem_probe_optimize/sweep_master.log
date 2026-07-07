@@ -1,0 +1,34 @@
+nohup: ignoring input
+============================================================
+Starting CEM run with seed 5
+Config : /home/idsia/SonoGym/cem_probe_results_sweep/configs/cem_probe_optimize_seed5.yaml
+Output : /home/idsia/SonoGym/cem_probe_results_sweep/seed_5
+Log    : /home/idsia/SonoGym/cem_probe_results_sweep/logs/seed_5.log
+============================================================
+Finished seed 5
+
+============================================================
+Starting CEM run with seed 6
+Config : /home/idsia/SonoGym/cem_probe_results_sweep/configs/cem_probe_optimize_seed6.yaml
+Output : /home/idsia/SonoGym/cem_probe_results_sweep/seed_6
+Log    : /home/idsia/SonoGym/cem_probe_results_sweep/logs/seed_6.log
+============================================================
+Finished seed 6
+
+============================================================
+Starting CEM run with seed 7
+Config : /home/idsia/SonoGym/cem_probe_results_sweep/configs/cem_probe_optimize_seed7.yaml
+Output : /home/idsia/SonoGym/cem_probe_results_sweep/seed_7
+Log    : /home/idsia/SonoGym/cem_probe_results_sweep/logs/seed_7.log
+============================================================
+Finished seed 7
+
+============================================================
+Starting CEM run with seed 8
+Config : /home/idsia/SonoGym/cem_probe_results_sweep/configs/cem_probe_optimize_seed8.yaml
+Output : /home/idsia/SonoGym/cem_probe_results_sweep/seed_8
+Log    : /home/idsia/SonoGym/cem_probe_results_sweep/logs/seed_8.log
+============================================================
+Finished seed 8
+
+All CEM sweep runs completed.

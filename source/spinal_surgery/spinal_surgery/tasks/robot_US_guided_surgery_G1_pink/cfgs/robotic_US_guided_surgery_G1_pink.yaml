@@ -1,20 +1,39 @@
 use_wandb: True
 
+run: 'random_probe' # standard_surgery
+
 robot:
   type: 'g1'
   side: 'left' # 'left' or 'right'
+  pose_randomization: False
 
 g1: 
-  pos: [0.1, -0.7, 1.1]
+  pos: [0.1, -0.69, 1.1]
   yaw: 90.0
   height: 0.13 # +0.01
   height_img: 0.137 # +0.01
+  randomization:
+    position:
+      x: [-0.05, 0.05]
+      y: [-0.05, 0.05]
+      z: [-0.05, 0.05]
+  time_length:
+    play: 3.0
+    train: 3.0
 
 h1: 
   pos: [0.03, -0.86, 0.93]
   yaw: 90.0
   height: 0.193 
   height_img: 0.20 
+  randomization:
+    position:
+      x: [-0.05, 0.05]
+      y: [-0.05, 0.05]
+      z: [-0.05, 0.05]
+  time_length:
+    play: 2.0 
+    train: 3.5
 
 patient:
   pos: [0.2, -0.55, 1.10]
@@ -29,45 +48,64 @@ bed:
   scale: 0.0008
 
 motion_planning:
-  joint_pos_rand_max: [0.1, 0.1, 0.1, 0.05, 0.1, 0.1, 0.05, 0.1, 0.1, 0.0] # ultimo 0.05 per g1
-  vertebra_to_US_2d_pos: [-30.0, 0.0] # [-30, 0.0]
-  US_roll_adj: -0.4   #-0.4
-  vertebra_to_US_rand_max: 5.0 # 10.0
-  US_roll_rand_max: 0.1
-  scale: [[2, 2, 0.1]]
+  standard_surgery:
+    joint_pos_rand_max: [0.1, 0.1, 0.1, 0.05, 0.1, 0.1, 0.05, 0.1, 0.1, 0.05] 
+    vertebra_to_US_2d_pos: [-29.5, -18]
+    US_roll_adj: -0.4   # -0.4
+    US_target_2d_angle: 1.66
+    vertebra_to_US_rand_range:
+      x: [0, 0] 
+      z: [0, 0] 
+    US_roll_rand_max: 0.0  # roll noise around US_roll_adj
+    US_yaw_rand_max: 0.0 # yaw noise around US_target_2d_angle
+    scale: [[2, 2, 0.1]]
+    patient_xz_goal: [150, 170, 3.14] # placeholder
+
+  random_probe:
+    joint_pos_rand_max: [0.06, 0.06, 0.06, 0.03, 0.06, 0.06, 0.03, 0.06, 0.06, 0.03] # [0.1, 0.1, 0.1, 0.05, 0.1, 0.1, 0.05, 0.1, 0.1, 0.05] 
+    vertebra_to_US_2d_pos: [-30, 0.0]
+    US_roll_adj: -0.4   # -0.4
+    US_target_2d_angle: 1.57
+    vertebra_to_US_rand_range:
+      x: [-15.0, 15.0] 
+      z: [-15.0, 15.0] 
+    US_roll_rand_max: 0.0  # roll noise around US_roll_adj
+    US_yaw_rand_max: 0.2 # yaw noise around US_target_2d_angle
+    scale: [[2, 2, 0.1]]
+    patient_xz_goal: [150, 170, 3.14]
 
 observation: 
+  style: "large" # large = 7 x 150 x 200, small 25 x 37 x 50
   3D: True
+  image_3D_thickness: 7
   downsample: 4
   mode: 'US' # 'seg', 'CT', 'US'
   scale: 0.02 # 0.1, 0.0005, 0.1 for learning-based, 0.02 for model-based
   scale_net: 0.1
+  image_3D_offsets: [-12, -8, -4, 0, 4, 8, 12]
 
 action: 
   mode: 'continuous' # 'discrete', 'continuous'
-  scale: [0.06, 0.06, 0.06, 0.3, 0.3]  # [0.1, 0.1, 0.1, 1.0, 1.0, 1.0]
-  max_action: [0.015, 0.015, 0.015, 0.03, 0.03]  # [0.03, 0.03, 0.03, 0.1, 0.1, 0.1]
+  scale: [0.01, 0.01, 0.01, 0.1, 0.1]  # [0.1, 0.1, 0.1, 1.0, 1.0, 1.0]
+  max_action: [0.01, 0.01, 0.01, 0.1, 0.1]  # [0.03, 0.03, 0.03, 0.1, 0.1, 0.1]
 
 reward:
-  safe_height: 0.04 # 5cm # 10 cm
+  safe_height: 0.04 
   w_pos: 30.0
-  w_insertion: 300.0 # 100
-  w_angle: 6.0
-  w_cost: 20 # 20
+  w_insertion: 300.0 
+  w_angle: 4.0
+  w_cost: 20 
 
 
 sim:
-  episode_length: 4 # 4 10
   patient_xz_range: [[100, 80, 1.0], [180, 170, 3.0]]
   patient_xz_init_range: [[100, 80, 1.5], [180, 170, 3.0]]
   if_use_ct: True
   us: 'conv'
   ct_range: [-300, 3000]
-  vis_us: True
+  vis_us: True 
   vis_int: 5
   vis_seg_map: False
   
 if_record_traj: True
-record_path: /recordings/robot_US_guided_surgery_G1_bm/
-
-
+record_path: /recordings/robot_US_guided_surgery_G1_pink/
